@@ -1,0 +1,7 @@
+imapserver: imap.gmail.com:993
+login: ibaukebc@gmail.com
+password: password
+notbefore: 2021-07-21
+db: ebcfetch.db
+subject: (\d+)\,*\s*([a-zA-Z0-9\-]+)\,*\s*(\d+)?\.*\d*\s*\,*\s*(\d\d?[.:]*\d\d)?
+strict: (\d+)\s*([a-zA-Z0-9\-]+)\s*(\d+)\s*(\d\d\d\d)
