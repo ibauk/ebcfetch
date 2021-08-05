@@ -1,7 +1,13 @@
 imapserver: imap.gmail.com:993
 login: ibaukebc@gmail.com
 password: password
+
+# Don't fetch emails older (imap.internaldate) than this date
 notbefore: 2021-07-21
 db: ebcfetch.db
-subject: (\d+)\,*\s*([a-zA-Z0-9\-]+)\,*\s*(\d+)?\.*\d*\s*\,*\s*(\d\d?[.:]*\d\d)?
-strict: (\d+)\s*([a-zA-Z0-9\-]+)\s*(\d+)\s*(\d\d\d\d)
+
+# Acceptable subject line RE. This accepts decorated entrant number, commas as separators, various time formats, optional odo/time
+subject: '^\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?'
+
+# Subject line RE to measure strict adherence to standard
+strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
