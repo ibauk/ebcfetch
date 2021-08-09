@@ -2,12 +2,24 @@ imapserver: imap.gmail.com:993
 login: ibaukebc@gmail.com
 password: password
 
+# Sleep this long between mailbox inspections
+sleepseconds: 50
+
 # Don't fetch emails older (imap.internaldate) than this date
-notbefore: 2021-07-21
+notbefore: 2021-07-01
+selectflags: ["\\Flagged", "\\Seen"]
+
+
+
 db: ebcfetch.db
 
 # Acceptable subject line RE. This accepts decorated entrant number, commas as separators, various time formats, optional odo/time
-subject: '^\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?'
+subject: '^\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?\s*(.*)'
 
 # Subject line RE to measure strict adherence to standard
 strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
+checkstrict: true
+
+# Decision codes for various rejections
+entrantbad: 9
+bonusbad: 1
