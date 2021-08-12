@@ -4,23 +4,39 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/DusanKasan/parsemail"
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	_ "github.com/mattn/go-sqlite3"
 	yaml "gopkg.in/yaml.v2"
 )
 
+const progdesc = `
+I extract Electronic Bonus Claims from the designated email account using IMAP and load them into 
+the scoring database ready for judging by a human being.
+
+I parse the Subject line for the four fields entrant, bonus, odo and time and load the single photo
+into the database. If the Subject line doesn't parse correctly, or if either the entrant or bonus
+codes are not present in the database, or there's more than one photo, I "unsee" the email and 
+don't record it in the database. Such unseen emails must be processed by hand. Look for unread 
+emails in a Gmail window.  Photos are assumed to be JPGs.
+
+If using Gmail, "Less secure apps access" must be enabled. To do that, edit the Google Account
+settings, [Security]. Then enable the setting. Check that this is still enabled shortly before the
+rally as Google resets it automatically after a while.`
+
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
 var yml = flag.String("cfg", "ebcfetch.yml", "Path of YAML config file")
+var showusage = flag.Bool("?", false, "Show this help text")
 
 const apptitle = "EBCFetch v1.0"
 const timefmt = time.RFC3339
@@ -44,10 +60,9 @@ var CFG struct {
 	LocalTZ      *time.Location
 	OffsetTZ     string
 	SelectFlags  []string `yaml:"selectflags"`
-	BadBonus     int      `yaml:"bonusbad"`
-	BadEntrant   int      `yaml:"entrantbad"`
 	CheckStrict  bool     `yaml:"checkstrict"`
 	SleepSeconds int      `yaml:"sleepseconds"`
+	ImageFolder  string   `yaml:"imagefolder"`
 }
 
 // This contains the results of parsing the Subject line.
@@ -101,16 +116,39 @@ func parseTime(s string) time.Time {
 	return time.Time{}
 }
 
-func timeFromPhoto(fname string) time.Time {
+func timeFromPhoto(fname string, cd string) time.Time {
 
-	tt, err := time.Parse(time.RFC3339, fname[0:4]+"-"+fname[4:6]+"-"+fname[6:8]+"T"+fname[9:11]+":"+fname[11:13]+":"+fname[13:15]+CFG.OffsetTZ)
-	if err != nil {
-		fmt.Printf("%v\n", err)
+	//fmt.Printf("tfp: '%v' = '%v'\n", fname, cd)
+	// 20210717_185053.jpg
+	nametimRE := regexp.MustCompile(`(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)`)
+	ptime := time.Time{}
+	xx := nametimRE.FindStringSubmatch(fname)
+
+	//fmt.Printf("tfp1: %v\n", xx)
+	if xx == nil {
+		//fmt.Printf("Filename %v is not a timestamp\n", fname)
+		// modification-date="Sat, 17 Jul 2021 17:57:48 GMT
+		modRE := regexp.MustCompile(`modification\-date="([^"]+)"`)
+		creRE := regexp.MustCompile(`creation\-date="([^"]+)"`)
+		xx = modRE.FindStringSubmatch(cd)
+		if xx == nil {
+			xx = creRE.FindStringSubmatch(cd)
+		}
+		if xx != nil {
+
+			ptime, _ = time.Parse(time.RFC1123, xx[1])
+		}
+	} else {
+		//fmt.Printf("%v\n", xx)
+		ptime, _ = time.Parse(time.RFC3339, xx[1]+"-"+xx[2]+"-"+xx[3]+"T"+xx[4]+":"+xx[5]+":"+xx[6]+CFG.OffsetTZ)
 	}
-	return tt
+	return ptime
 }
 
 func nameFromContentType(ct string) string {
+	if *verbose {
+		fmt.Printf("ContentType is %v\n", ct)
+	}
 	re := regexp.MustCompile(`\"(.+)\"`)
 	sm := re.FindSubmatch([]byte(ct))
 	//fmt.Printf("%v %v\n", string(sm[0]), string(sm[1]))
@@ -164,7 +202,7 @@ func calcOffsetString(t time.Time) string {
 			res = res + "0"
 		}
 	}
-	res = res + strconv.Itoa(hrs) + "00"
+	res = res + strconv.Itoa(hrs) + ":00"
 	return res
 
 }
@@ -211,7 +249,13 @@ func fetchNewClaims() {
 	}
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = CFG.SelectFlags
-	criteria.SentSince = CFG.NotBefore
+	nulltime := time.Time{}
+	if CFG.NotBefore != nulltime {
+		criteria.SentSince = CFG.NotBefore
+	}
+	if CFG.NotAfter != nulltime {
+		criteria.SentBefore = CFG.NotAfter
+	}
 
 	uids, err := c.Search(criteria)
 	if err != nil {
@@ -227,7 +271,7 @@ func fetchNewClaims() {
 		fmt.Printf("Fetching %v message(s)\n", len(uids))
 	}
 
-	// Get the whole message body
+	// Get the whole message body, automatically sets //Seen
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchUid, imap.FetchInternalDate}
 
@@ -237,7 +281,6 @@ func fetchNewClaims() {
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
-	dealtwith := new(imap.SeqSet)
 	autoclaimed := new(imap.SeqSet)
 	skipped := new(imap.SeqSet)
 
@@ -247,30 +290,19 @@ func fetchNewClaims() {
 		if r == nil {
 			log.Fatal("Server didn't returned message body")
 		}
-		m, err := parsemail.Parse(r)
+		m, err := Parse(r)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		dealtwith.AddNum(msg.Uid) // Add msg to queue to be flagged
-
 		f4 := parseSubject(m.Subject, false)
 
-		if !f4.ok || !validateEntrant(*f4) {
-			if *verbose {
+		if !f4.ok || !validateEntrant(*f4) || !validateBonus(*f4) {
+			if !*silent {
 				fmt.Printf("Skipping %v [%v]\n", m.Subject, msg.Uid)
 			}
 			skipped.AddNum(msg.Uid)
 			continue
-		}
-
-		autoclaimed.AddNum(msg.Uid)
-
-		var decision int = -1
-
-		ok, pts := validateBonus(*f4)
-		if !ok {
-			decision = CFG.BadBonus
 		}
 
 		var strictok bool = true
@@ -279,21 +311,65 @@ func fetchNewClaims() {
 			strictok = f5.ok
 		}
 
+		var photoid int = 0
 		var photoTime time.Time
+		var numphotos int = 0
 		for _, a := range m.Attachments {
-			pt := timeFromPhoto(a.Filename)
+			//fmt.Printf("Att: CD = %v\n", a.ContentDisposition)
+			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
+			numphotos++
 			if pt.After(photoTime) {
 				photoTime = pt
 			}
-			fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
+			pix, err := ioutil.ReadAll(a.Data)
+			if err != nil {
+				if !*silent {
+					fmt.Printf("Attachment error %v\n", err)
+				}
+			} else {
+				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				if *verbose {
+					fmt.Printf("Attachment of size %v bytes\n", len(pix))
+				}
+			}
+			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
 		}
 		for _, a := range m.EmbeddedFiles {
-			pt := timeFromPhoto(nameFromContentType(a.ContentType))
+			//fmt.Printf("Emm: CD = %v\n", a.ContentDisposition)
+			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
+			numphotos++
 			if pt.After(photoTime) {
 				photoTime = pt
 			}
-			fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
+			pix, err := ioutil.ReadAll(a.Data)
+			if err != nil {
+				if !*silent {
+					fmt.Printf("Embedding error %v\n", err)
+				}
+			} else {
+				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				if *verbose {
+					fmt.Printf("Embedded image of size %v bytes\n", len(pix))
+				}
+			}
+			if *verbose {
+				fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
+			}
 		}
+
+		if numphotos > 1 {
+			if !*silent {
+				fmt.Printf("Skipping %v [%v] multiple photos\n", m.Subject, msg.Uid)
+			}
+			skipped.AddNum(msg.Uid)
+			continue
+		}
+
+		if !*silent {
+			fmt.Printf("Claiming %v\n", m.Subject)
+		}
+		autoclaimed.AddNum(msg.Uid)
+
 		var sentatTime time.Time = msg.InternalDate
 		for _, xr := range m.Header["X-Received"] {
 			ts := TIMESTAMP{parseTime(extractTime(xr)).Local()}
@@ -307,19 +383,18 @@ func fetchNewClaims() {
 				sentatTime = ts.date
 			}
 		}
-		//xmitTime := latestTime.Sub(m.Date)
 
 		var sb strings.Builder
 		sb.WriteString("INSERT INTO ebclaims (LoggedAt,DateTime,EntrantID,BonusID,OdoReading,")
-		sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,Decision,")
-		sb.WriteString("StrictOk,Points,AttachmentTime,FirstTime) ")
-		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
+		sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
+		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 		_, err = DBH.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
 			f4.EntrantID, f4.BonusID, f4.OdoReading,
 			storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
 			storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
 			m.Subject, f4.Extra,
-			decision, strictok, pts, photoTime, sentatTime)
+			strictok, photoTime, sentatTime, photoid)
 		if err != nil {
 			fmt.Printf("Can't store claim - %v\n", err)
 		}
@@ -333,27 +408,16 @@ func fetchNewClaims() {
 		log.Fatal(err)
 	}
 
-	item := imap.FormatFlagsOp(imap.AddFlags, true)
-	flags := []interface{}{imap.FlaggedFlag}
-	if *verbose {
-		fmt.Printf("Touched %v %v %v\n", dealtwith, item, flags)
-	}
-	err = c.UidStore(dealtwith, item, flags, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
 	if !autoclaimed.Empty() {
-		flags = []interface{}{imap.SeenFlag}
+		item := imap.FormatFlagsOp(imap.AddFlags, true)
+		flags := []interface{}{imap.FlaggedFlag, imap.SeenFlag}
 		if *verbose {
 			fmt.Printf("Claimed %v %v %v\n", autoclaimed, item, flags)
 		}
-		//err = c.UidStore(autoclaimed, item, flags, nil)
-		//if err != nil {
-		//	log.Fatal(err)
-		//}
 	}
 	if !skipped.Empty() {
-		item = imap.FormatFlagsOp(imap.SetFlags, true)
+		item := imap.FormatFlagsOp(imap.SetFlags, true)
+		flags := []interface{}{imap.FlaggedFlag}
 		if *verbose {
 			fmt.Printf("Unseeing %v %v %v\n", skipped, item, flags)
 		}
@@ -367,7 +431,17 @@ func fetchNewClaims() {
 
 func init() {
 
+	flag.Usage = func() {
+		w := flag.CommandLine.Output()
+		fmt.Fprintf(w, "%v\n", apptitle)
+		flag.PrintDefaults()
+		fmt.Fprintf(w, "%v\n", progdesc)
+	}
 	flag.Parse()
+	if *showusage {
+		flag.Usage()
+		os.Exit(1)
+	}
 	configPath := *yml
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -405,6 +479,7 @@ func loadRallyData() {
 	CFG.LocalTZ, _ = time.LoadLocation(LocalTZ)
 	CFG.RallyStart, _ = time.ParseInLocation("2006-01-02T15:04", RallyStart, CFG.LocalTZ)
 	CFG.OffsetTZ = calcOffsetString(CFG.RallyStart)
+	//fmt.Printf("%v\n", CFG.OffsetTZ)
 	CFG.RallyFinish, _ = time.ParseInLocation("2006-01-02T15:04", RallyFinish, CFG.LocalTZ)
 
 }
@@ -462,14 +537,16 @@ func storeTimeDB(t time.Time) string {
 	return res
 }
 
-func validateBonus(f4 Fourfields) (bool, int) {
+func validateBonus(f4 Fourfields) bool {
 
-	res, pts := fetchBonus(f4.BonusID, "bonuses")
+	// We actually don't care about the points so drop them
+
+	res, _ := fetchBonus(f4.BonusID, "bonuses")
 	if res {
-		return true, pts
+		return true
 	}
-	res, pts = fetchBonus(f4.BonusID, "specials")
-	return res, pts
+	res, _ = fetchBonus(f4.BonusID, "specials")
+	return res
 
 }
 
@@ -488,4 +565,27 @@ func validateEntrant(f4 Fourfields) bool {
 	var RiderName, Email string
 	rows.Scan(&RiderName, &Email)
 	return RiderName != ""
+}
+
+func imageFilename(imgid int, entrant int, bonus string) string {
+
+	return "img" + "-" + strconv.Itoa(entrant) + "-" + bonus + "-" + strconv.Itoa(imgid) + ".jpg"
+
+}
+func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
+
+	var photoid int
+
+	sqlx := "INSERT INTO ebcphotos(EntrantID,BonusID,EmailID) VALUES(?,?,?)"
+	DBH.Exec(sqlx, entrant, bonus, emailid)
+	row := DBH.QueryRow("SELECT last_insert_rowid()")
+	row.Scan(&photoid)
+
+	x := filepath.Join(CFG.ImageFolder, imageFilename(photoid, entrant, bonus))
+	err := ioutil.WriteFile(x, pic, 0644)
+	if err != nil {
+		fmt.Printf("Can't write image %v - error:%v\n", x, err)
+	}
+	return photoid
+
 }
