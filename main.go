@@ -146,13 +146,11 @@ func timeFromPhoto(fname string, cd string) time.Time {
 }
 
 func nameFromContentType(ct string) string {
-	if *verbose {
-		fmt.Printf("ContentType is %v\n", ct)
-	}
+
 	re := regexp.MustCompile(`\"(.+)\"`)
 	sm := re.FindSubmatch([]byte(ct))
-	//fmt.Printf("%v %v\n", string(sm[0]), string(sm[1]))
 	return string(sm[1])
+
 }
 
 func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
@@ -257,9 +255,15 @@ func fetchNewClaims() {
 		criteria.SentBefore = CFG.NotAfter
 	}
 
+	if *verbose {
+		fmt.Printf("Searching ... ")
+	}
 	uids, err := c.Search(criteria)
 	if err != nil {
 		log.Println(err)
+	}
+	if *verbose {
+		fmt.Printf("ok\n")
 	}
 
 	seqset := new(imap.SeqSet)
@@ -283,10 +287,11 @@ func fetchNewClaims() {
 
 	autoclaimed := new(imap.SeqSet)
 	skipped := new(imap.SeqSet)
+	dealtwith := new(imap.SeqSet)
 
 	for msg := range messages {
 
-		r := msg.GetBody(section)
+		r := msg.GetBody(section) // This automatically marks the message as 'read'
 		if r == nil {
 			log.Fatal("Server didn't returned message body")
 		}
@@ -301,7 +306,7 @@ func fetchNewClaims() {
 			if !*silent {
 				fmt.Printf("Skipping %v [%v]\n", m.Subject, msg.Uid)
 			}
-			skipped.AddNum(msg.Uid)
+			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			continue
 		}
 
@@ -314,6 +319,7 @@ func fetchNewClaims() {
 		var photoid int = 0
 		var photoTime time.Time
 		var numphotos int = 0
+		var photosok bool = true
 		for _, a := range m.Attachments {
 			//fmt.Printf("Att: CD = %v\n", a.ContentDisposition)
 			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
@@ -325,9 +331,15 @@ func fetchNewClaims() {
 			if err != nil {
 				if !*silent {
 					fmt.Printf("Attachment error %v\n", err)
+					photosok = false
+					break
 				}
 			} else {
 				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				if photoid == 0 {
+					photosok = false
+					break
+				}
 				if *verbose {
 					fmt.Printf("Attachment of size %v bytes\n", len(pix))
 				}
@@ -345,9 +357,15 @@ func fetchNewClaims() {
 			if err != nil {
 				if !*silent {
 					fmt.Printf("Embedding error %v\n", err)
+					photosok = false
+					break
 				}
 			} else {
 				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				if photoid == 0 {
+					photosok = false
+					break
+				}
 				if *verbose {
 					fmt.Printf("Embedded image of size %v bytes\n", len(pix))
 				}
@@ -357,18 +375,17 @@ func fetchNewClaims() {
 			}
 		}
 
+		if !photosok {
+			skipped.AddNum(msg.Uid)
+			continue
+		}
 		if numphotos > 1 {
 			if !*silent {
 				fmt.Printf("Skipping %v [%v] multiple photos\n", m.Subject, msg.Uid)
 			}
-			skipped.AddNum(msg.Uid)
+			dealtwith.AddNum(msg.Uid)
 			continue
 		}
-
-		if !*silent {
-			fmt.Printf("Claiming %v\n", m.Subject)
-		}
-		autoclaimed.AddNum(msg.Uid)
 
 		var sentatTime time.Time = msg.InternalDate
 		for _, xr := range m.Header["X-Received"] {
@@ -397,7 +414,15 @@ func fetchNewClaims() {
 			strictok, photoTime, sentatTime, photoid)
 		if err != nil {
 			fmt.Printf("Can't store claim - %v\n", err)
+			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
+			continue
+
 		}
+		if !*silent {
+			fmt.Printf("Claiming %v\n", m.Subject)
+		}
+		autoclaimed.AddNum(msg.Uid)
+
 		if *verbose {
 			fmt.Printf("%v  [%v] = %v\n", m.Subject, msg.Uid, strictok)
 		}
@@ -415,11 +440,22 @@ func fetchNewClaims() {
 			fmt.Printf("Claimed %v %v %v\n", autoclaimed, item, flags)
 		}
 	}
-	if !skipped.Empty() {
+	if !dealtwith.Empty() {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{imap.FlaggedFlag}
 		if *verbose {
-			fmt.Printf("Unseeing %v %v %v\n", skipped, item, flags)
+			fmt.Printf("Leaving unread %v %v %v\n", dealtwith, item, flags)
+		}
+		err = c.UidStore(dealtwith, item, flags, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	if !skipped.Empty() { // These are not yet dealt with
+		item := imap.FormatFlagsOp(imap.SetFlags, true)
+		flags := []interface{}{}
+		if *verbose {
+			fmt.Printf("Releasing %v %v %v\n", skipped, item, flags)
 		}
 		err = c.UidStore(skipped, item, flags, nil)
 		if err != nil {
@@ -574,7 +610,15 @@ func imageFilename(imgid int, entrant int, bonus string) string {
 }
 func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
 
-	var photoid int
+	var photoid int = 0
+
+	_, err := DBH.Exec("BEGIN TRANSACTION")
+	if err != nil {
+		if *verbose {
+			fmt.Printf("Can't store photo %v\n", err)
+		}
+		return 0
+	}
 
 	sqlx := "INSERT INTO ebcphotos(EntrantID,BonusID,EmailID) VALUES(?,?,?)"
 	DBH.Exec(sqlx, entrant, bonus, emailid)
@@ -582,10 +626,13 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
 	row.Scan(&photoid)
 
 	x := filepath.Join(CFG.ImageFolder, imageFilename(photoid, entrant, bonus))
-	err := ioutil.WriteFile(x, pic, 0644)
+	err = ioutil.WriteFile(x, pic, 0644)
 	if err != nil {
 		fmt.Printf("Can't write image %v - error:%v\n", x, err)
 	}
+	sqlx = "UPDATE ebcphotos SET image=? WHERE rowid=?"
+	DBH.Exec(sqlx, x, photoid)
+	DBH.Exec("COMMIT TRANSACTION")
 	return photoid
 
 }
