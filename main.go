@@ -1,3 +1,5 @@
+// EBCFetch:
+// I fetch bonus claims from email and store in ScoreMaster database
 package main
 
 import (
@@ -41,9 +43,9 @@ var showusage = flag.Bool("?", false, "Show this help text")
 const apptitle = "EBCFetch v1.0"
 const timefmt = time.RFC3339
 
-var DBH *sql.DB
+var dbh *sql.DB
 
-var CFG struct {
+var cfg struct {
 	ImapServer   string    `yaml:"imapserver"`
 	ImapLogin    string    `yaml:"login"`
 	ImapPassword string    `yaml:"password"`
@@ -65,9 +67,9 @@ var CFG struct {
 	ImageFolder  string   `yaml:"imagefolder"`
 }
 
-// This contains the results of parsing the Subject line.
+// fourFields: this contains the results of parsing the Subject line.
 // The "four fields" are entrant, bonus, odo & claimtime
-type Fourfields struct {
+type fourFields struct {
 	ok         bool
 	EntrantID  int
 	BonusID    string
@@ -79,7 +81,7 @@ type Fourfields struct {
 
 const myTimeFormat = "2006-01-02 15:04:05"
 
-type TIMESTAMP struct {
+type timestamp struct {
 	date time.Time
 }
 
@@ -140,7 +142,7 @@ func timeFromPhoto(fname string, cd string) time.Time {
 		}
 	} else {
 		//fmt.Printf("%v\n", xx)
-		ptime, _ = time.Parse(time.RFC3339, xx[1]+"-"+xx[2]+"-"+xx[3]+"T"+xx[4]+":"+xx[5]+":"+xx[6]+CFG.OffsetTZ)
+		ptime, _ = time.Parse(time.RFC3339, xx[1]+"-"+xx[2]+"-"+xx[3]+"T"+xx[4]+":"+xx[5]+":"+xx[6]+cfg.OffsetTZ)
 	}
 	return ptime
 }
@@ -155,6 +157,7 @@ func nameFromContentType(ct string) string {
 
 func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	/*
+	 * calcClaimDate:
 	 * The subject line of the email contains a timestamp reflecting the time of day only
 	 * I turn this into a fully specified timestamp by reference to other variables
 	 * taken from the email and the rally specification.
@@ -169,14 +172,14 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 
 	var year, day int
 	var mth time.Month
-	if CFG.RallyStart == CFG.RallyFinish {
-		year, mth, day = CFG.RallyStart.Date()
+	if cfg.RallyStart == cfg.RallyFinish {
+		year, mth, day = cfg.RallyStart.Date()
 	} else {
 		year, mth, day = rfc822date.Date()
 	}
-	cd := time.Date(year, mth, day, hh, mm, 0, 0, CFG.LocalTZ)
+	cd := time.Date(year, mth, day, hh, mm, 0, 0, cfg.LocalTZ)
 	hrs := cd.Sub(rfc822date).Hours()
-	if hrs > 1 && cd.Day() != CFG.RallyStart.Day() { // Claimed time is more than one hour later than the send (Date:) time of the email
+	if hrs > 1 && cd.Day() != cfg.RallyStart.Day() { // Claimed time is more than one hour later than the send (Date:) time of the email
 		cd = cd.AddDate(0, 0, -1)
 	}
 	return cd
@@ -207,7 +210,7 @@ func calcOffsetString(t time.Time) string {
 
 func fetchBonus(b string, t string) (bool, int) {
 
-	rows, err := DBH.Query("SELECT BriefDesc,Points FROM "+t+" WHERE BonusID=?", b)
+	rows, err := dbh.Query("SELECT BriefDesc,Points FROM "+t+" WHERE BonusID=?", b)
 	if err != nil {
 		fmt.Printf("Bonus! %v %v\n", b, err)
 		return false, 0
@@ -227,7 +230,7 @@ func fetchBonus(b string, t string) (bool, int) {
 func fetchNewClaims() {
 
 	// Connect to server
-	c, err := client.DialTLS(CFG.ImapServer, nil)
+	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -236,7 +239,7 @@ func fetchNewClaims() {
 	defer c.Logout()
 
 	// Login
-	if err := c.Login(CFG.ImapLogin, CFG.ImapPassword); err != nil {
+	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
 		log.Fatal(err)
 	}
 
@@ -246,13 +249,13 @@ func fetchNewClaims() {
 		log.Fatal(err)
 	}
 	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = CFG.SelectFlags
+	criteria.WithoutFlags = cfg.SelectFlags
 	nulltime := time.Time{}
-	if CFG.NotBefore != nulltime {
-		criteria.SentSince = CFG.NotBefore
+	if cfg.NotBefore != nulltime {
+		criteria.SentSince = cfg.NotBefore
 	}
-	if CFG.NotAfter != nulltime {
-		criteria.SentBefore = CFG.NotAfter
+	if cfg.NotAfter != nulltime {
+		criteria.SentBefore = cfg.NotAfter
 	}
 
 	if *verbose {
@@ -311,7 +314,7 @@ func fetchNewClaims() {
 		}
 
 		var strictok bool = true
-		if CFG.CheckStrict {
+		if cfg.CheckStrict {
 			f5 := parseSubject(m.Subject, true)
 			strictok = f5.ok
 		}
@@ -389,13 +392,13 @@ func fetchNewClaims() {
 
 		var sentatTime time.Time = msg.InternalDate
 		for _, xr := range m.Header["X-Received"] {
-			ts := TIMESTAMP{parseTime(extractTime(xr)).Local()}
+			ts := timestamp{parseTime(extractTime(xr)).Local()}
 			if ts.date.Before(sentatTime) {
 				sentatTime = ts.date
 			}
 		}
 		for _, xr := range m.Header["Received"] {
-			ts := TIMESTAMP{parseTime(extractTime(xr)).Local()}
+			ts := timestamp{parseTime(extractTime(xr)).Local()}
 			if ts.date.Before(sentatTime) {
 				sentatTime = ts.date
 			}
@@ -406,7 +409,7 @@ func fetchNewClaims() {
 		sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
 		sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
 		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-		_, err = DBH.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
+		_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
 			f4.EntrantID, f4.BonusID, f4.OdoReading,
 			storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
 			storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
@@ -491,11 +494,11 @@ func init() {
 	defer file.Close()
 
 	D := yaml.NewDecoder(file)
-	D.Decode(&CFG)
-	CFG.StrictRE = regexp.MustCompile(CFG.Strict)
-	CFG.SubjectRE = regexp.MustCompile(CFG.Subject)
+	D.Decode(&cfg)
+	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
+	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
 
-	DBH, err = sql.Open("sqlite3", CFG.Path2DB)
+	dbh, err = sql.Open("sqlite3", cfg.Path2DB)
 	if err != nil {
 		panic(err)
 	}
@@ -504,43 +507,43 @@ func init() {
 
 func loadRallyData() {
 
-	rows, err := DBH.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
+	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
 	if err != nil {
 		fmt.Printf("OMG %v\n", err)
 	}
 	defer rows.Close()
 	rows.Next()
 	var RallyStart, RallyFinish, LocalTZ string
-	rows.Scan(&CFG.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
-	CFG.LocalTZ, _ = time.LoadLocation(LocalTZ)
-	CFG.RallyStart, _ = time.ParseInLocation("2006-01-02T15:04", RallyStart, CFG.LocalTZ)
-	CFG.OffsetTZ = calcOffsetString(CFG.RallyStart)
-	//fmt.Printf("%v\n", CFG.OffsetTZ)
-	CFG.RallyFinish, _ = time.ParseInLocation("2006-01-02T15:04", RallyFinish, CFG.LocalTZ)
+	rows.Scan(&cfg.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
+	cfg.LocalTZ, _ = time.LoadLocation(LocalTZ)
+	cfg.RallyStart, _ = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
+	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
+	//fmt.Printf("%v\n", cfg.OffsetTZ)
+	cfg.RallyFinish, _ = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
 
 }
 
 func main() {
 	if !*silent {
 		fmt.Printf("%v\nCopyright (c) 2021 Bob Stammers\n", apptitle)
-		fmt.Printf("Monitoring %v for %v\n", CFG.ImapLogin, CFG.RallyTitle)
+		fmt.Printf("Monitoring %v for %v\n", cfg.ImapLogin, cfg.RallyTitle)
 	}
 	for {
 		fetchNewClaims()
-		time.Sleep(time.Duration(CFG.SleepSeconds) * time.Second)
+		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
 	}
 }
 
-func parseSubject(s string, formal bool) *Fourfields {
+func parseSubject(s string, formal bool) *fourFields {
 
 	//fmt.Printf("Parsing %v\n", s)
-	var f4 Fourfields
+	var f4 fourFields
 	var ff []string
 
 	if formal {
-		ff = CFG.StrictRE.FindStringSubmatch(s)
+		ff = cfg.StrictRE.FindStringSubmatch(s)
 	} else {
-		ff = CFG.SubjectRE.FindStringSubmatch(s)
+		ff = cfg.SubjectRE.FindStringSubmatch(s)
 	}
 	f4.ok = len(ff) > 0
 	if formal && len(ff) < 5 {
@@ -573,7 +576,7 @@ func storeTimeDB(t time.Time) string {
 	return res
 }
 
-func validateBonus(f4 Fourfields) bool {
+func validateBonus(f4 fourFields) bool {
 
 	// We actually don't care about the points so drop them
 
@@ -586,9 +589,9 @@ func validateBonus(f4 Fourfields) bool {
 
 }
 
-func validateEntrant(f4 Fourfields) bool {
+func validateEntrant(f4 fourFields) bool {
 
-	rows, err := DBH.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
+	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
 		fmt.Printf("Entrant! %v %v\n", f4.EntrantID, err)
 		return false
@@ -612,7 +615,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
 
 	var photoid int = 0
 
-	_, err := DBH.Exec("BEGIN TRANSACTION")
+	_, err := dbh.Exec("BEGIN TRANSACTION")
 	if err != nil {
 		if *verbose {
 			fmt.Printf("Can't store photo %v\n", err)
@@ -621,18 +624,18 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
 	}
 
 	sqlx := "INSERT INTO ebcphotos(EntrantID,BonusID,EmailID) VALUES(?,?,?)"
-	DBH.Exec(sqlx, entrant, bonus, emailid)
-	row := DBH.QueryRow("SELECT last_insert_rowid()")
+	dbh.Exec(sqlx, entrant, bonus, emailid)
+	row := dbh.QueryRow("SELECT last_insert_rowid()")
 	row.Scan(&photoid)
 
-	x := filepath.Join(CFG.ImageFolder, imageFilename(photoid, entrant, bonus))
+	x := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus))
 	err = ioutil.WriteFile(x, pic, 0644)
 	if err != nil {
 		fmt.Printf("Can't write image %v - error:%v\n", x, err)
 	}
 	sqlx = "UPDATE ebcphotos SET image=? WHERE rowid=?"
-	DBH.Exec(sqlx, x, photoid)
-	DBH.Exec("COMMIT TRANSACTION")
+	dbh.Exec(sqlx, x, photoid)
+	dbh.Exec("COMMIT TRANSACTION")
 	return photoid
 
 }
