@@ -232,7 +232,8 @@ func fetchNewClaims() {
 	// Connect to server
 	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 
 	// Don't forget to logout
