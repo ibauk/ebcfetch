@@ -40,7 +40,7 @@ var silent = flag.Bool("s", false, "Silent")
 var yml = flag.String("cfg", "ebcfetch.yml", "Path of YAML config file")
 var showusage = flag.Bool("?", false, "Show this help text")
 
-const apptitle = "EBCFetch v1.0"
+const apptitle = "EBCFetch v1.0.1"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -241,13 +241,15 @@ func fetchNewClaims() {
 
 	// Login
 	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 
 	// Select INBOX
 	_, err = c.Select("INBOX", false)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = cfg.SelectFlags
@@ -297,11 +299,13 @@ func fetchNewClaims() {
 
 		r := msg.GetBody(section) // This automatically marks the message as 'read'
 		if r == nil {
-			log.Fatal("Server didn't returned message body")
+			log.Println("Server didn't returned message body")
+			continue
 		}
 		m, err := Parse(r)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			continue
 		}
 
 		f4 := parseSubject(m.Subject, false)
@@ -433,8 +437,8 @@ func fetchNewClaims() {
 	}
 
 	if err := <-done; err != nil {
-		fmt.Printf("OMG!!\n")
-		log.Fatal(err)
+		fmt.Printf("OMG!! %v\n", err)
+		return
 	}
 
 	if !autoclaimed.Empty() {
@@ -452,7 +456,8 @@ func fetchNewClaims() {
 		}
 		err = c.UidStore(dealtwith, item, flags, nil)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 	}
 	if !skipped.Empty() { // These are not yet dealt with
@@ -463,7 +468,8 @@ func fetchNewClaims() {
 		}
 		err = c.UidStore(skipped, item, flags, nil)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 	}
 
