@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,7 +41,7 @@ var silent = flag.Bool("s", false, "Silent")
 var yml = flag.String("cfg", "ebcfetch.yml", "Path of YAML config file")
 var showusage = flag.Bool("?", false, "Show this help text")
 
-const apptitle = "EBCFetch v1.0.1"
+const apptitle = "EBCFetch v1.1"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -65,6 +66,7 @@ var cfg struct {
 	CheckStrict  bool     `yaml:"checkstrict"`
 	SleepSeconds int      `yaml:"sleepseconds"`
 	ImageFolder  string   `yaml:"imagefolder"`
+	MatchEmail   bool     `yaml:"matchemail"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -310,7 +312,7 @@ func fetchNewClaims() {
 
 		f4 := parseSubject(m.Subject, false)
 
-		if !f4.ok || !validateEntrant(*f4) || !validateBonus(*f4) {
+		if !f4.ok || !validateEntrant(*f4, m.Header.Get("From")) || !validateBonus(*f4) {
 			if !*silent {
 				fmt.Printf("Skipping %v [%v]\n", m.Subject, msg.Uid)
 			}
@@ -532,7 +534,7 @@ func loadRallyData() {
 
 func main() {
 	if !*silent {
-		fmt.Printf("%v\nCopyright (c) 2021 Bob Stammers\n", apptitle)
+		fmt.Printf("%v\nCopyright (c) 2022 Bob Stammers\n", apptitle)
 		fmt.Printf("Monitoring %v for %v\n", cfg.ImapLogin, cfg.RallyTitle)
 	}
 	for {
@@ -596,7 +598,7 @@ func validateBonus(f4 fourFields) bool {
 
 }
 
-func validateEntrant(f4 fourFields) bool {
+func validateEntrant(f4 fourFields, from string) bool {
 
 	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
@@ -610,7 +612,16 @@ func validateEntrant(f4 fourFields) bool {
 
 	var RiderName, Email string
 	rows.Scan(&RiderName, &Email)
-	return RiderName != ""
+	v, _ := mail.ParseAddress(from)
+	e, _ := mail.ParseAddressList(Email)
+	ok := !cfg.MatchEmail
+	for _, em := range e {
+		ok = ok || strings.EqualFold(em.Address, v.Address)
+	}
+	if !ok {
+		fmt.Printf("Received from %v for rider %v <%v> [%v]\n", v.Address, RiderName, Email, ok)
+	}
+	return ok && RiderName != ""
 }
 
 func imageFilename(imgid int, entrant int, bonus string) string {

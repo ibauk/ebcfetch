@@ -1,6 +1,6 @@
 imapserver: imap.gmail.com:993
 login: ibaukebc@gmail.com
-password: 3!s9qFb6*K
+password: 
 
 # Sleep this long between mailbox inspections
 sleepseconds: 10
@@ -23,3 +23,6 @@ strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
 checkstrict: true
 
 imagefolder: ebcimg
+
+# If true, only process emails sent from entrant's registered address
+matchemail: true
