@@ -26,3 +26,11 @@ imagefolder: ebcimg
 
 # If true, only process emails sent from entrant's registered address
 matchemail: true
+
+# Executable to convert HEIC image files to JPG
+# The arguments are expected to be:- filename.HEIC filename.JPG
+# Will be called at BOJ with no arguments to validate installation
+# This uses the ImageMagick package which must be installed on the server
+heic2jpg: magick
+
+convertheic2jpg: true

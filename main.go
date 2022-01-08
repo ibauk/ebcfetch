@@ -4,12 +4,14 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/mail"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -30,7 +32,8 @@ I parse the Subject line for the four fields entrant, bonus, odo and time and lo
 into the database. If the Subject line doesn't parse correctly, or if either the entrant or bonus
 codes are not present in the database, or there's more than one photo, I "unsee" the email and 
 don't record it in the database. Such unseen emails must be processed by hand. Look for unread 
-emails in a Gmail window.  Photos are assumed to be JPGs.
+emails in a Gmail window.  Photos are expected to be JPGs but HEICs are also accepted and can be
+automatically converted to JPG using an external utility.
 
 If using Gmail, "Less secure apps access" must be enabled. To do that, edit the Google Account
 settings, [Security]. Then enable the setting. Check that this is still enabled shortly before the
@@ -67,6 +70,8 @@ var cfg struct {
 	SleepSeconds int      `yaml:"sleepseconds"`
 	ImageFolder  string   `yaml:"imagefolder"`
 	MatchEmail   bool     `yaml:"matchemail"`
+	Heic2jpg     string   `yaml:"heic2jpg"`
+	ConvertHeic  bool     `yaml:"convertheic2jpg"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -312,9 +317,11 @@ func fetchNewClaims() {
 
 		f4 := parseSubject(m.Subject, false)
 
-		if !f4.ok || !validateEntrant(*f4, m.Header.Get("From")) || !validateBonus(*f4) {
+		ve := validateEntrant(*f4, m.Header.Get("From"))
+		vb := validateBonus(*f4)
+		if !f4.ok || !ve || !vb {
 			if !*silent {
-				fmt.Printf("Skipping %v [%v]\n", m.Subject, msg.Uid)
+				fmt.Printf("Skipping %v [%v] ok=%v,ve=%v,vb=%v\n", m.Subject, msg.Uid, f4.ok, ve, vb)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			continue
@@ -331,7 +338,7 @@ func fetchNewClaims() {
 		var numphotos int = 0
 		var photosok bool = true
 		for _, a := range m.Attachments {
-			//fmt.Printf("Att: CD = %v\n", a.ContentDisposition)
+			fmt.Printf("Att: CD = %v\n", a.ContentDisposition)
 			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -345,7 +352,7 @@ func fetchNewClaims() {
 					break
 				}
 			} else {
-				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, string(a.Filename))
 				if photoid == 0 {
 					photosok = false
 					break
@@ -357,7 +364,7 @@ func fetchNewClaims() {
 			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
 		}
 		for _, a := range m.EmbeddedFiles {
-			//fmt.Printf("Emm: CD = %v\n", a.ContentDisposition)
+			fmt.Printf("Emm: CD = %v\n", a.ContentDisposition)
 			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -371,7 +378,7 @@ func fetchNewClaims() {
 					break
 				}
 			} else {
-				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix)
+				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, a.ContentDisposition)
 				if photoid == 0 {
 					photosok = false
 					break
@@ -503,22 +510,33 @@ func init() {
 	defer file.Close()
 
 	D := yaml.NewDecoder(file)
-	D.Decode(&cfg)
+	err = D.Decode(&cfg)
+	if err != nil {
+		panic(err)
+	}
 	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
 	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
 
+	if _, err := os.Stat(cfg.Path2DB); errors.Is(err, os.ErrNotExist) {
+		fmt.Printf("Cannot access database %v\n", cfg.Path2DB)
+		panic(err)
+	}
 	dbh, err = sql.Open("sqlite3", cfg.Path2DB)
 	if err != nil {
 		panic(err)
 	}
 	loadRallyData()
+	if cfg.ConvertHeic {
+		validateHeicHandler()
+	}
 }
 
 func loadRallyData() {
 
 	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
 	if err != nil {
-		fmt.Printf("OMG %v\n", err)
+		fmt.Printf("Can't fetch rally parameters from %v\n", cfg.Path2DB)
+		panic(err)
 	}
 	defer rows.Close()
 	rows.Next()
@@ -590,10 +608,6 @@ func validateBonus(f4 fourFields) bool {
 	// We actually don't care about the points so drop them
 
 	res, _ := fetchBonus(f4.BonusID, "bonuses")
-	if res {
-		return true
-	}
-	res, _ = fetchBonus(f4.BonusID, "specials")
 	return res
 
 }
@@ -607,6 +621,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 	}
 	defer rows.Close()
 	if !rows.Next() {
+		fmt.Printf("No such entrant %v\n", f4.EntrantID)
 		return false
 	}
 
@@ -615,29 +630,37 @@ func validateEntrant(f4 fourFields, from string) bool {
 	v, _ := mail.ParseAddress(from)
 	e, _ := mail.ParseAddressList(Email)
 	ok := !cfg.MatchEmail
-	for _, em := range e {
-		ok = ok || strings.EqualFold(em.Address, v.Address)
-	}
 	if !ok {
-		fmt.Printf("Received from %v for rider %v <%v> [%v]\n", v.Address, RiderName, Email, ok)
+		for _, em := range e {
+			ok = ok || strings.EqualFold(em.Address, v.Address)
+		}
+		if !ok {
+			fmt.Printf("Received from %v for rider %v <%v> [%v]\n", v.Address, RiderName, Email, ok)
+		}
 	}
-	return ok && RiderName != ""
+	return ok && !strings.EqualFold(RiderName, "")
 }
 
-func imageFilename(imgid int, entrant int, bonus string) string {
+func imageFilename(imgid int, entrant int, bonus string, isHeic bool) string {
 
-	return "img" + "-" + strconv.Itoa(entrant) + "-" + bonus + "-" + strconv.Itoa(imgid) + ".jpg"
+	var ext string = ".jpg"
+	if isHeic {
+		ext = ".HEIC"
+	}
+	return "img" + "-" + strconv.Itoa(entrant) + "-" + bonus + "-" + strconv.Itoa(imgid) + ext
 
 }
-func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
+func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename string) int {
 
 	var photoid int = 0
 
+	isHeic, _ := regexp.MatchString("(?i)\\.heic", filename)
 	_, err := dbh.Exec("BEGIN TRANSACTION")
 	if err != nil {
 		if *verbose {
 			fmt.Printf("Can't store photo %v\n", err)
 		}
+		dbh.Exec("ROLLBACK")
 		return 0
 	}
 
@@ -646,14 +669,39 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte) int {
 	row := dbh.QueryRow("SELECT last_insert_rowid()")
 	row.Scan(&photoid)
 
-	x := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus))
+	x := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
 	err = ioutil.WriteFile(x, pic, 0644)
 	if err != nil {
 		fmt.Printf("Can't write image %v - error:%v\n", x, err)
+		dbh.Exec("ROLLBACK")
+		return 0
+	}
+	y := x
+	if cfg.ConvertHeic && isHeic {
+		y = filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
+		cmd := exec.Command(cfg.Heic2jpg, x, y)
+		err := cmd.Run()
+		if err != nil {
+			fmt.Printf("HEIC x %v FAILED %v\n", cfg.Heic2jpg, err)
+			dbh.Exec("ROLLBACK")
+			return 0
+		}
+
 	}
 	sqlx = "UPDATE ebcphotos SET image=? WHERE rowid=?"
-	dbh.Exec(sqlx, x, photoid)
+	dbh.Exec(sqlx, y, photoid)
 	dbh.Exec("COMMIT TRANSACTION")
 	return photoid
+
+}
+
+func validateHeicHandler() {
+
+	cmd := exec.Command(cfg.Heic2jpg)
+	err := cmd.Run()
+	if err != nil {
+		fmt.Printf("HEIC handler %v NOT AVAILABLE\n %v\n", cfg.Heic2jpg, err)
+		cfg.ConvertHeic = false
+	}
 
 }
