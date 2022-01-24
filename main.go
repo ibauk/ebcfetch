@@ -486,6 +486,10 @@ func fetchNewClaims() {
 
 func init() {
 
+	ex, _ := os.Executable()
+	exPath := filepath.Dir(ex)
+	os.Chdir(exPath)
+
 	flag.Usage = func() {
 		w := flag.CommandLine.Output()
 		fmt.Fprintf(w, "%v\n", apptitle)
@@ -500,19 +504,32 @@ func init() {
 	configPath := *yml
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return
+		fmt.Printf("Can't access %v, run aborted\n", configPath)
 	}
 
 	file, err := os.Open(configPath)
-	if err != nil {
-		return
-	}
-	defer file.Close()
+	if err == nil {
 
-	D := yaml.NewDecoder(file)
-	err = D.Decode(&cfg)
-	if err != nil {
-		panic(err)
+		defer file.Close()
+
+		D := yaml.NewDecoder(file)
+		D.Decode(&cfg)
+	}
+
+	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
+		fmt.Println("Email configuration has not been specified")
+		fmt.Printf("Email fetching will not be possible. Please fix %v and retry\n", configPath)
+		os.Exit(1)
+	}
+	if cfg.ImapPassword == "" {
+		fmt.Printf("No password has been set for incoming IMAP account %v\n", cfg.ImapServer)
+		fmt.Printf("Email fetching will not be possible. Please fix %v and retry\n", configPath)
+		os.Exit(1)
+	}
+
+	if cfg.Path2DB == "" {
+		fmt.Printf("No database has been specified. Please fix %v and retry\n", configPath)
+		os.Exit(1)
 	}
 	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
 	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
@@ -521,6 +538,12 @@ func init() {
 		fmt.Printf("Cannot access database %v\n", cfg.Path2DB)
 		panic(err)
 	}
+
+	if _, err = os.Stat(cfg.Path2DB); os.IsNotExist(err) {
+		fmt.Printf("cannot access database '%v' run aborted.", cfg.Path2DB)
+		os.Exit(1)
+	}
+
 	dbh, err = sql.Open("sqlite3", cfg.Path2DB)
 	if err != nil {
 		panic(err)
@@ -535,8 +558,8 @@ func loadRallyData() {
 
 	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
 	if err != nil {
-		fmt.Printf("Can't fetch rally parameters from %v\n", cfg.Path2DB)
-		panic(err)
+		fmt.Printf("OMG %v\n", err)
+		os.Exit(1)
 	}
 	defer rows.Close()
 	rows.Next()
