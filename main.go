@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -41,10 +42,13 @@ rally as Google resets it automatically after a while.`
 
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
-var yml = flag.String("cfg", "ebcfetch.yml", "Path of YAML config file")
+var yml = flag.String("cfg", "", "Path of YAML config file")
 var showusage = flag.Bool("?", false, "Show this help text")
+var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster database")
+var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 
-const apptitle = "EBCFetch v1.1"
+const apptitle = "EBCFetch"
+const appversion = "1.2"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -72,6 +76,8 @@ var cfg struct {
 	MatchEmail   bool     `yaml:"matchemail"`
 	Heic2jpg     string   `yaml:"heic2jpg"`
 	ConvertHeic  bool     `yaml:"convertheic2jpg"`
+	DontRun      bool     `yaml:"dontrun"`
+	KeyWait      bool     `yaml:"debugwait"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -234,6 +240,19 @@ func fetchBonus(b string, t string) (bool, int) {
 
 }
 
+func fetchConfigFromDB() string {
+	rows, err := dbh.Query("SELECT ebcsettings FROM rallyparams")
+	if err != nil {
+		fmt.Printf("%s: Can't fetch config from database [%v] run aborted\n", apptitle, err)
+		osExit(1)
+	}
+	defer rows.Close()
+	rows.Next()
+	var res string
+	rows.Scan(&res)
+	return res
+
+}
 func fetchNewClaims() {
 
 	// Connect to server
@@ -321,7 +340,7 @@ func fetchNewClaims() {
 		vb := validateBonus(*f4)
 		if !f4.ok || !ve || !vb {
 			if !*silent {
-				fmt.Printf("Skipping %v [%v] ok=%v,ve=%v,vb=%v\n", m.Subject, msg.Uid, f4.ok, ve, vb)
+				fmt.Printf("%v: Skipping %v [%v] ok=%v,ve=%v,vb=%v\n", apptitle, m.Subject, msg.Uid, f4.ok, ve, vb)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			continue
@@ -338,7 +357,7 @@ func fetchNewClaims() {
 		var numphotos int = 0
 		var photosok bool = true
 		for _, a := range m.Attachments {
-			fmt.Printf("Att: CD = %v\n", a.ContentDisposition)
+			fmt.Printf("%s: Att: CD = %v\n", apptitle, a.ContentDisposition)
 			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -347,7 +366,7 @@ func fetchNewClaims() {
 			pix, err := ioutil.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
-					fmt.Printf("Attachment error %v\n", err)
+					fmt.Printf("%s: Attachment error %v\n", apptitle, err)
 					photosok = false
 					break
 				}
@@ -358,13 +377,13 @@ func fetchNewClaims() {
 					break
 				}
 				if *verbose {
-					fmt.Printf("Attachment of size %v bytes\n", len(pix))
+					fmt.Printf("%s: Attachment of size %v bytes\n", apptitle, len(pix))
 				}
 			}
 			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
 		}
 		for _, a := range m.EmbeddedFiles {
-			fmt.Printf("Emm: CD = %v\n", a.ContentDisposition)
+			fmt.Printf("%s: Emm: CD = %v\n", apptitle, a.ContentDisposition)
 			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -373,7 +392,7 @@ func fetchNewClaims() {
 			pix, err := ioutil.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
-					fmt.Printf("Embedding error %v\n", err)
+					fmt.Printf("%s: Embedding error %v\n", apptitle, err)
 					photosok = false
 					break
 				}
@@ -384,11 +403,11 @@ func fetchNewClaims() {
 					break
 				}
 				if *verbose {
-					fmt.Printf("Embedded image of size %v bytes\n", len(pix))
+					fmt.Printf("%s: Embedded image of size %v bytes\n", apptitle, len(pix))
 				}
 			}
 			if *verbose {
-				fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
+				fmt.Printf("%s:   Photo: %v\n", apptitle, pt.Format(myTimeFormat))
 			}
 		}
 
@@ -398,7 +417,7 @@ func fetchNewClaims() {
 		}
 		if numphotos > 1 {
 			if !*silent {
-				fmt.Printf("Skipping %v [%v] multiple photos\n", m.Subject, msg.Uid)
+				fmt.Printf("%s: Skipping %v [%v] multiple photos\n", apptitle, m.Subject, msg.Uid)
 			}
 			dealtwith.AddNum(msg.Uid)
 			continue
@@ -430,23 +449,23 @@ func fetchNewClaims() {
 			m.Subject, f4.Extra,
 			strictok, photoTime, sentatTime, photoid)
 		if err != nil {
-			fmt.Printf("Can't store claim - %v\n", err)
+			fmt.Printf("%s: Can't store claim - %v\n", apptitle, err)
 			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
 			continue
 
 		}
 		if !*silent {
-			fmt.Printf("Claiming %v\n", m.Subject)
+			fmt.Printf("%s: Claiming %v\n", apptitle, m.Subject)
 		}
 		autoclaimed.AddNum(msg.Uid)
 
 		if *verbose {
-			fmt.Printf("%v  [%v] = %v\n", m.Subject, msg.Uid, strictok)
+			fmt.Printf("%s: %v  [%v] = %v\n", apptitle, m.Subject, msg.Uid, strictok)
 		}
 	}
 
 	if err := <-done; err != nil {
-		fmt.Printf("OMG!! %v\n", err)
+		fmt.Printf("%s: OMG!! %v\n", apptitle, err)
 		return
 	}
 
@@ -454,14 +473,14 @@ func fetchNewClaims() {
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.FlaggedFlag, imap.SeenFlag}
 		if *verbose {
-			fmt.Printf("Claimed %v %v %v\n", autoclaimed, item, flags)
+			fmt.Printf("%s: Claimed %v %v %v\n", apptitle, autoclaimed, item, flags)
 		}
 	}
 	if !dealtwith.Empty() {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{imap.FlaggedFlag}
 		if *verbose {
-			fmt.Printf("Leaving unread %v %v %v\n", dealtwith, item, flags)
+			fmt.Printf("%s: Leaving unread %v %v %v\n", apptitle, dealtwith, item, flags)
 		}
 		err = c.UidStore(dealtwith, item, flags, nil)
 		if err != nil {
@@ -473,7 +492,7 @@ func fetchNewClaims() {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{}
 		if *verbose {
-			fmt.Printf("Releasing %v %v %v\n", skipped, item, flags)
+			fmt.Printf("%s: Releasing %v %v %v\n", apptitle, skipped, item, flags)
 		}
 		err = c.UidStore(skipped, item, flags, nil)
 		if err != nil {
@@ -486,13 +505,13 @@ func fetchNewClaims() {
 
 func init() {
 
-	ex, _ := os.Executable()
-	exPath := filepath.Dir(ex)
-	os.Chdir(exPath)
+	//ex, _ := os.Executable()
+	//exPath := filepath.Dir(ex)
+	//os.Chdir(exPath)
 
 	flag.Usage = func() {
 		w := flag.CommandLine.Output()
-		fmt.Fprintf(w, "%v\n", apptitle)
+		fmt.Fprintf(w, "%v v%v\n", apptitle, appversion)
 		flag.PrintDefaults()
 		fmt.Fprintf(w, "%v\n", progdesc)
 	}
@@ -501,53 +520,59 @@ func init() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	configPath := *yml
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		fmt.Printf("Can't access %v, run aborted\n", configPath)
+	if *path2db == "" {
+		fmt.Printf("%s: No database has been specified Run aborted\n", apptitle)
+		osExit(1)
 	}
 
-	file, err := os.Open(configPath)
-	if err == nil {
+	openDB(*path2db)
 
-		defer file.Close()
+	configPath := *yml
 
+	if strings.EqualFold(configPath, "") {
+		configPath = "config"
+		ymltext := fetchConfigFromDB()
+		file := strings.NewReader(ymltext)
 		D := yaml.NewDecoder(file)
 		D.Decode(&cfg)
+	} else {
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			wd, _ := os.Getwd()
+			fmt.Printf("%s: Can't access %v [%v], run aborted\n", apptitle, configPath, wd)
+		}
+
+		file, err := os.Open(configPath)
+		if err == nil {
+
+			defer file.Close()
+
+			D := yaml.NewDecoder(file)
+			D.Decode(&cfg)
+		}
+	}
+
+	cfg.Path2DB = *path2db
+
+	if cfg.DontRun {
+		fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
+		osExit(0)
 	}
 
 	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
-		fmt.Println("Email configuration has not been specified")
-		fmt.Printf("Email fetching will not be possible. Please fix %v and retry\n", configPath)
-		os.Exit(1)
+		fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
+		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+		osExit(1)
 	}
 	if cfg.ImapPassword == "" {
-		fmt.Printf("No password has been set for incoming IMAP account %v\n", cfg.ImapServer)
-		fmt.Printf("Email fetching will not be possible. Please fix %v and retry\n", configPath)
-		os.Exit(1)
+		fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
+		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+		osExit(1)
 	}
 
-	if cfg.Path2DB == "" {
-		fmt.Printf("No database has been specified. Please fix %v and retry\n", configPath)
-		os.Exit(1)
-	}
 	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
 	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
 
-	if _, err := os.Stat(cfg.Path2DB); errors.Is(err, os.ErrNotExist) {
-		fmt.Printf("Cannot access database %v\n", cfg.Path2DB)
-		panic(err)
-	}
-
-	if _, err = os.Stat(cfg.Path2DB); os.IsNotExist(err) {
-		fmt.Printf("cannot access database '%v' run aborted.", cfg.Path2DB)
-		os.Exit(1)
-	}
-
-	dbh, err = sql.Open("sqlite3", cfg.Path2DB)
-	if err != nil {
-		panic(err)
-	}
 	loadRallyData()
 	if cfg.ConvertHeic {
 		validateHeicHandler()
@@ -558,8 +583,8 @@ func loadRallyData() {
 
 	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
 	if err != nil {
-		fmt.Printf("OMG %v\n", err)
-		os.Exit(1)
+		fmt.Printf("%s: OMG %v\n", apptitle, err)
+		osExit(1)
 	}
 	defer rows.Close()
 	rows.Next()
@@ -575,8 +600,8 @@ func loadRallyData() {
 
 func main() {
 	if !*silent {
-		fmt.Printf("%v\nCopyright (c) 2022 Bob Stammers\n", apptitle)
-		fmt.Printf("Monitoring %v for %v\n", cfg.ImapLogin, cfg.RallyTitle)
+		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
+		fmt.Printf("%v: Monitoring %v for %v\n", apptitle, cfg.ImapLogin, cfg.RallyTitle)
 	}
 	for {
 		fetchNewClaims()
@@ -584,6 +609,32 @@ func main() {
 	}
 }
 
+func openDB(dbpath string) {
+
+	var err error
+	if _, err = os.Stat(dbpath); errors.Is(err, os.ErrNotExist) {
+		fmt.Printf("%v: Cannot access database %v [%v] run aborted\n", apptitle, dbpath, err)
+		osExit(1)
+	}
+
+	dbh, err = sql.Open("sqlite3", dbpath)
+	if err != nil {
+		fmt.Printf("%v: Can't access database %v [%v] run aborted\n", apptitle, dbpath, err)
+		osExit(1)
+	}
+
+}
+
+func osExit(res int) {
+
+	if *debugwait || cfg.KeyWait {
+		waitforkey()
+	}
+
+	defer os.Exit(res)
+	runtime.Goexit()
+
+}
 func parseSubject(s string, formal bool) *fourFields {
 
 	//fmt.Printf("Parsing %v\n", s)
@@ -639,12 +690,12 @@ func validateEntrant(f4 fourFields, from string) bool {
 
 	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
-		fmt.Printf("Entrant! %v %v\n", f4.EntrantID, err)
+		fmt.Printf("%v: Entrant! %v %v\n", apptitle, f4.EntrantID, err)
 		return false
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		fmt.Printf("No such entrant %v\n", f4.EntrantID)
+		fmt.Printf("%v: No such entrant %v\n", apptitle, f4.EntrantID)
 		return false
 	}
 
@@ -658,7 +709,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 			ok = ok || strings.EqualFold(em.Address, v.Address)
 		}
 		if !ok {
-			fmt.Printf("Received from %v for rider %v <%v> [%v]\n", v.Address, RiderName, Email, ok)
+			fmt.Printf("%v: Received from %v for rider %v <%v> [%v]\n", apptitle, v.Address, RiderName, Email, ok)
 		}
 	}
 	return ok && !strings.EqualFold(RiderName, "")
@@ -681,7 +732,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	_, err := dbh.Exec("BEGIN TRANSACTION")
 	if err != nil {
 		if *verbose {
-			fmt.Printf("Can't store photo %v\n", err)
+			fmt.Printf("%v: Can't store photo %v\n", apptitle, err)
 		}
 		dbh.Exec("ROLLBACK")
 		return 0
@@ -695,7 +746,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	x := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
 	err = ioutil.WriteFile(x, pic, 0644)
 	if err != nil {
-		fmt.Printf("Can't write image %v - error:%v\n", x, err)
+		fmt.Printf("%v: Can't write image %v - error:%v\n", apptitle, x, err)
 		dbh.Exec("ROLLBACK")
 		return 0
 	}
@@ -705,7 +756,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 		cmd := exec.Command(cfg.Heic2jpg, x, y)
 		err := cmd.Run()
 		if err != nil {
-			fmt.Printf("HEIC x %v FAILED %v\n", cfg.Heic2jpg, err)
+			fmt.Printf("%v: HEIC x %v FAILED %v\n", apptitle, cfg.Heic2jpg, err)
 			dbh.Exec("ROLLBACK")
 			return 0
 		}
@@ -723,8 +774,15 @@ func validateHeicHandler() {
 	cmd := exec.Command(cfg.Heic2jpg)
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf("HEIC handler %v NOT AVAILABLE\n %v\n", cfg.Heic2jpg, err)
+		fmt.Printf("%s: HEIC handler %v NOT AVAILABLE (%v)\n", apptitle, cfg.Heic2jpg, err)
 		cfg.ConvertHeic = false
 	}
+
+}
+
+func waitforkey() {
+
+	fmt.Printf("%v: Press [Enter] to exit ... \n", apptitle)
+	fmt.Scanln()
 
 }
