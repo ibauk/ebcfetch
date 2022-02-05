@@ -72,6 +72,7 @@ var cfg struct {
 	SelectFlags  []string `yaml:"selectflags"`
 	CheckStrict  bool     `yaml:"checkstrict"`
 	SleepSeconds int      `yaml:"sleepseconds"`
+	Path2SM      string   `yaml:"path2sm"`
 	ImageFolder  string   `yaml:"imagefolder"`
 	MatchEmail   bool     `yaml:"matchemail"`
 	Heic2jpg     string   `yaml:"heic2jpg"`
@@ -225,7 +226,7 @@ func fetchBonus(b string, t string) (bool, int) {
 
 	rows, err := dbh.Query("SELECT BriefDesc,Points FROM "+t+" WHERE BonusID=?", b)
 	if err != nil {
-		fmt.Printf("Bonus! %v %v\n", b, err)
+		fmt.Printf("%s Bonus! %v %v\n", logts(), b, err)
 		return false, 0
 	}
 	defer rows.Close()
@@ -243,7 +244,7 @@ func fetchBonus(b string, t string) (bool, int) {
 func fetchConfigFromDB() string {
 	rows, err := dbh.Query("SELECT ebcsettings FROM rallyparams")
 	if err != nil {
-		fmt.Printf("%s: Can't fetch config from database [%v] run aborted\n", apptitle, err)
+		fmt.Printf("%s can't fetch config from database [%v] run aborted\n", logts(), err)
 		osExit(1)
 	}
 	defer rows.Close()
@@ -288,14 +289,14 @@ func fetchNewClaims() {
 	}
 
 	if *verbose {
-		fmt.Printf("Searching ... ")
+		fmt.Printf("%s searching ... ", logts())
 	}
 	uids, err := c.Search(criteria)
 	if err != nil {
 		log.Println(err)
 	}
 	if *verbose {
-		fmt.Printf("ok\n")
+		fmt.Printf("%s ok\n", logts())
 	}
 
 	seqset := new(imap.SeqSet)
@@ -304,7 +305,7 @@ func fetchNewClaims() {
 		return
 	}
 	if *verbose {
-		fmt.Printf("Fetching %v message(s)\n", len(uids))
+		fmt.Printf("%s fetching %v message(s)\n", logts(), len(uids))
 	}
 
 	// Get the whole message body, automatically sets //Seen
@@ -340,7 +341,7 @@ func fetchNewClaims() {
 		vb := validateBonus(*f4)
 		if !f4.ok || !ve || !vb {
 			if !*silent {
-				fmt.Printf("%v: Skipping %v [%v] ok=%v,ve=%v,vb=%v\n", apptitle, m.Subject, msg.Uid, f4.ok, ve, vb)
+				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, f4.ok, ve, vb)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			continue
@@ -357,7 +358,7 @@ func fetchNewClaims() {
 		var numphotos int = 0
 		var photosok bool = true
 		for _, a := range m.Attachments {
-			fmt.Printf("%s: Att: CD = %v\n", apptitle, a.ContentDisposition)
+			fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
 			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -366,7 +367,7 @@ func fetchNewClaims() {
 			pix, err := ioutil.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
-					fmt.Printf("%s: Attachment error %v\n", apptitle, err)
+					fmt.Printf("%s attachment error %v\n", logts(), err)
 					photosok = false
 					break
 				}
@@ -377,13 +378,13 @@ func fetchNewClaims() {
 					break
 				}
 				if *verbose {
-					fmt.Printf("%s: Attachment of size %v bytes\n", apptitle, len(pix))
+					fmt.Printf("%s attachment of size %v bytes\n", logts(), len(pix))
 				}
 			}
 			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
 		}
 		for _, a := range m.EmbeddedFiles {
-			fmt.Printf("%s: Emm: CD = %v\n", apptitle, a.ContentDisposition)
+			fmt.Printf("%s Emm: CD = %v\n", logts(), a.ContentDisposition)
 			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -392,7 +393,7 @@ func fetchNewClaims() {
 			pix, err := ioutil.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
-					fmt.Printf("%s: Embedding error %v\n", apptitle, err)
+					fmt.Printf("%s embedding error %v\n", logts(), err)
 					photosok = false
 					break
 				}
@@ -403,11 +404,11 @@ func fetchNewClaims() {
 					break
 				}
 				if *verbose {
-					fmt.Printf("%s: Embedded image of size %v bytes\n", apptitle, len(pix))
+					fmt.Printf("%s embedded image of size %v bytes\n", logts(), len(pix))
 				}
 			}
 			if *verbose {
-				fmt.Printf("%s:   Photo: %v\n", apptitle, pt.Format(myTimeFormat))
+				fmt.Printf("%s photo: %v\n", logts(), pt.Format(myTimeFormat))
 			}
 		}
 
@@ -417,7 +418,7 @@ func fetchNewClaims() {
 		}
 		if numphotos > 1 {
 			if !*silent {
-				fmt.Printf("%s: Skipping %v [%v] multiple photos\n", apptitle, m.Subject, msg.Uid)
+				fmt.Printf("%s skipping %v [%v] multiple photos\n", logts(), m.Subject, msg.Uid)
 			}
 			dealtwith.AddNum(msg.Uid)
 			continue
@@ -449,23 +450,23 @@ func fetchNewClaims() {
 			m.Subject, f4.Extra,
 			strictok, photoTime, sentatTime, photoid)
 		if err != nil {
-			fmt.Printf("%s: Can't store claim - %v\n", apptitle, err)
+			fmt.Printf("%s can't store claim - %v\n", logts(), err)
 			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
 			continue
 
 		}
 		if !*silent {
-			fmt.Printf("%s: Claiming %v\n", apptitle, m.Subject)
+			fmt.Printf("%s claiming %v\n", logts(), m.Subject)
 		}
 		autoclaimed.AddNum(msg.Uid)
 
 		if *verbose {
-			fmt.Printf("%s: %v  [%v] = %v\n", apptitle, m.Subject, msg.Uid, strictok)
+			fmt.Printf("%s %v  [%v] = %v\n", logts(), m.Subject, msg.Uid, strictok)
 		}
 	}
 
 	if err := <-done; err != nil {
-		fmt.Printf("%s: OMG!! %v\n", apptitle, err)
+		fmt.Printf("%s OMG!! %v\n", logts(), err)
 		return
 	}
 
@@ -473,14 +474,14 @@ func fetchNewClaims() {
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.FlaggedFlag, imap.SeenFlag}
 		if *verbose {
-			fmt.Printf("%s: Claimed %v %v %v\n", apptitle, autoclaimed, item, flags)
+			fmt.Printf("%s claimed %v %v %v\n", logts(), autoclaimed, item, flags)
 		}
 	}
 	if !dealtwith.Empty() {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{imap.FlaggedFlag}
 		if *verbose {
-			fmt.Printf("%s: Leaving unread %v %v %v\n", apptitle, dealtwith, item, flags)
+			fmt.Printf("%s leaving unread %v %v %v\n", logts(), dealtwith, item, flags)
 		}
 		err = c.UidStore(dealtwith, item, flags, nil)
 		if err != nil {
@@ -492,7 +493,7 @@ func fetchNewClaims() {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{}
 		if *verbose {
-			fmt.Printf("%s: Releasing %v %v %v\n", apptitle, skipped, item, flags)
+			fmt.Printf("%s releasing %v %v %v\n", logts(), skipped, item, flags)
 		}
 		err = c.UidStore(skipped, item, flags, nil)
 		if err != nil {
@@ -522,7 +523,7 @@ func init() {
 	}
 
 	if *path2db == "" {
-		fmt.Printf("%s: No database has been specified Run aborted\n", apptitle)
+		fmt.Printf("%s No database has been specified Run aborted\n", apptitle)
 		osExit(1)
 	}
 
@@ -595,6 +596,13 @@ func loadRallyData() {
 	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
 	//fmt.Printf("%v\n", cfg.OffsetTZ)
 	cfg.RallyFinish, _ = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
+
+}
+
+func logts() string {
+
+	var t = time.Now()
+	return t.Format("2006-01-02 15:04:05")
 
 }
 
@@ -690,12 +698,12 @@ func validateEntrant(f4 fourFields, from string) bool {
 
 	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
-		fmt.Printf("%v: Entrant! %v %v\n", apptitle, f4.EntrantID, err)
+		fmt.Printf("%v Entrant! %v %v\n", logts(), f4.EntrantID, err)
 		return false
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		fmt.Printf("%v: No such entrant %v\n", apptitle, f4.EntrantID)
+		fmt.Printf("%v No such entrant %v\n", logts(), f4.EntrantID)
 		return false
 	}
 
@@ -709,7 +717,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 			ok = ok || strings.EqualFold(em.Address, v.Address)
 		}
 		if !ok {
-			fmt.Printf("%v: Received from %v for rider %v <%v> [%v]\n", apptitle, v.Address, RiderName, Email, ok)
+			fmt.Printf("%v received from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
 		}
 	}
 	return ok && !strings.EqualFold(RiderName, "")
@@ -732,7 +740,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	_, err := dbh.Exec("BEGIN TRANSACTION")
 	if err != nil {
 		if *verbose {
-			fmt.Printf("%v: Can't store photo %v\n", apptitle, err)
+			fmt.Printf("%v can't store photo %v\n", logts(), err)
 		}
 		dbh.Exec("ROLLBACK")
 		return 0
@@ -743,23 +751,24 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	row := dbh.QueryRow("SELECT last_insert_rowid()")
 	row.Scan(&photoid)
 
-	x := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
+	x := filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
 	err = ioutil.WriteFile(x, pic, 0644)
 	if err != nil {
-		fmt.Printf("%v: Can't write image %v - error:%v\n", apptitle, x, err)
+		fmt.Printf("%v can't write image %v - error:%v\n", logts(), x, err)
 		dbh.Exec("ROLLBACK")
 		return 0
 	}
-	y := x
+	y := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
 	if cfg.ConvertHeic && isHeic {
-		y = filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
+		y = filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
 		cmd := exec.Command(cfg.Heic2jpg, x, y)
 		err := cmd.Run()
 		if err != nil {
-			fmt.Printf("%v: HEIC x %v FAILED %v\n", apptitle, cfg.Heic2jpg, err)
+			fmt.Printf("%v HEIC x %v FAILED %v\n", logts(), cfg.Heic2jpg, err)
 			dbh.Exec("ROLLBACK")
 			return 0
 		}
+		y = filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
 
 	}
 	sqlx = "UPDATE ebcphotos SET image=? WHERE rowid=?"

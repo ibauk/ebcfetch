@@ -22,6 +22,10 @@ subject: '^\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*
 strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
 checkstrict: true
 
+# Filesystem path to ScoreMaster folder
+path2sm: sm
+
+# Path from ScoreMaster folder to EBC image folder
 imagefolder: ebcimg
 
 # If true, only process emails sent from entrant's registered address
