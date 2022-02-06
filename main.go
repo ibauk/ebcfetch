@@ -35,12 +35,13 @@ correctly, or if either the entrant or bonus codes are not present in the
 database, or there's more than one photo, I "unsee" the email and don't record 
 it in the database. Such unseen emails must be processed by hand. Look for 
 unread emails in a Gmail window.  Photos are expected to be JPGs but HEICs are 
-also accepted and can be automatically converted to JPG using an external utility.
+also accepted and can be automatically converted to JPG using an external 
+utility.
 
 If using Gmail, "Less secure apps access" must be enabled. To do that, edit the 
-Google Account settings, [Security]. Then enable the setting. Check that this is 
-still enabled shortly before the rally as Google resets it automatically after a 
-while.`
+Google Account settings, [Security]. Then enable the setting. Check that this 
+is still enabled shortly before the rally as Google resets it automatically 
+after a while.`
 
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
