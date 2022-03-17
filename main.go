@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
@@ -51,7 +52,7 @@ var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster databa
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.2"
+const appversion = "1.3"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -577,13 +578,16 @@ func init() {
 	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
 	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
 
-	loadRallyData()
+	if !loadRallyData() {
+		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+		osExit(1)
+	}
 	if cfg.ConvertHeic {
 		validateHeicHandler()
 	}
 }
 
-func loadRallyData() {
+func loadRallyData() bool {
 
 	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
 	if err != nil {
@@ -594,11 +598,30 @@ func loadRallyData() {
 	rows.Next()
 	var RallyStart, RallyFinish, LocalTZ string
 	rows.Scan(&cfg.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
-	cfg.LocalTZ, _ = time.LoadLocation(LocalTZ)
-	cfg.RallyStart, _ = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
+
+	cfg.LocalTZ, err = time.LoadLocation(LocalTZ)
+	if err != nil {
+		fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, LocalTZ)
+		return false
+	}
+	if *verbose {
+		fmt.Printf("cfg.LocalTZ is %v\n", cfg.LocalTZ)
+	}
+	cfg.RallyStart, err = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
+	if err != nil {
+		fmt.Printf("%s RallyStart %s cannot be parsed\n", apptitle, RallyStart)
+		return false
+	}
 	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
-	//fmt.Printf("%v\n", cfg.OffsetTZ)
-	cfg.RallyFinish, _ = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
+	if *verbose {
+		fmt.Printf("cfg.OffsetTZ is %v\n", cfg.OffsetTZ)
+	}
+	cfg.RallyFinish, err = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
+	if err != nil {
+		fmt.Printf("%s RallyFinish %s cannot be parsed\n", apptitle, RallyFinish)
+		return false
+	}
+	return true
 
 }
 
