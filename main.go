@@ -39,10 +39,9 @@ unread emails in a Gmail window.  Photos are expected to be JPGs but HEICs are
 also accepted and can be automatically converted to JPG using an external 
 utility.
 
-If using Gmail, "Less secure apps access" must be enabled. To do that, edit the 
-Google Account settings, [Security]. Then enable the setting. Check that this 
-is still enabled shortly before the rally as Google resets it automatically 
-after a while.`
+If using Gmail, 2-factor authentication must be enabled and an 'app password'
+must be created. To do that, edit the Google Account settings, [Security].
+Check that all is ok before the rally.`
 
 var verbose = flag.Bool("v", false, "Verbose")
 var silent = flag.Bool("s", false, "Silent")
