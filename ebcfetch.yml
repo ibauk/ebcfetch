@@ -16,7 +16,7 @@ selectflags: ["\\Flagged", "\\Seen"]
 db: ebcfetch.db
 
 # Acceptable subject line RE. This accepts decorated entrant number, commas as separators, various time formats, optional odo/time
-subject: '^\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?\s*(.*)'
+subject: '\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?\s*(.*)'
 
 # Subject line RE to measure strict adherence to standard
 strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
@@ -38,3 +38,6 @@ matchemail: true
 heic2jpg: magick
 
 convertheic2jpg: true
+
+Allow four fields in body rather than Subject
+allowbody: true
