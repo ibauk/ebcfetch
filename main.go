@@ -51,7 +51,7 @@ var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster databa
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.3"
+const appversion = "1.4"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -168,7 +168,10 @@ func nameFromContentType(ct string) string {
 
 	re := regexp.MustCompile(`\"(.+)\"`)
 	sm := re.FindSubmatch([]byte(ct))
-	return string(sm[1])
+	if len(sm) > 1 {
+		return string(sm[1])
+	}
+	return ct
 
 }
 
@@ -344,7 +347,20 @@ func fetchNewClaims() {
 		vb := validateBonus(*f4)
 		if !f4.ok || !ve || !vb {
 			if !*silent {
-				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, f4.ok, ve, vb)
+				okx := "ok"
+				if !f4.ok {
+					okx = "FALSE"
+				}
+				vex := "ok"
+				if !ve {
+					vex = "FALSE"
+				}
+				vbx := "ok"
+				if !vb {
+					vbx = "FALSE"
+				}
+				//fmt.Printf("F4: E{%v} B{%v} O{%v} T{%v:%v}\n", f4.EntrantID, f4.BonusID, f4.OdoReading, f4.TimeHH, f4.TimeMM)
+				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, okx, vex, vbx)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			continue
@@ -361,7 +377,9 @@ func fetchNewClaims() {
 		var numphotos int = 0
 		var photosok bool = true
 		for _, a := range m.Attachments {
-			fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
+			if *verbose {
+				fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
+			}
 			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -387,7 +405,9 @@ func fetchNewClaims() {
 			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
 		}
 		for _, a := range m.EmbeddedFiles {
-			fmt.Printf("%s Emm: CD = %v\n", logts(), a.ContentDisposition)
+			if *verbose {
+				fmt.Printf("%s Emb: CD = %v\n", logts(), a.ContentDisposition)
+			}
 			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
 			numphotos++
 			if pt.After(photoTime) {
@@ -464,7 +484,11 @@ func fetchNewClaims() {
 		autoclaimed.AddNum(msg.Uid)
 
 		if *verbose {
-			fmt.Printf("%s %v  [%v] = %v\n", logts(), m.Subject, msg.Uid, strictok)
+			var sok string = "!strictF4"
+			if strictok {
+				sok = "strictF4 ok"
+			}
+			fmt.Printf("%s %v  [msg.Uid %v] = %v\n", logts(), m.Subject, msg.Uid, sok)
 		}
 	}
 

@@ -6,6 +6,7 @@ package main
  * To be expanded for my own purposes.
  *
  * Include ContentDisposition header for attachments/embedded files
+ * Caters for clear-signed Apple attachments 2022-06-07
  *
  */
 
@@ -25,8 +26,10 @@ import (
 const contentTypeMultipartMixed = "multipart/mixed"
 const contentTypeMultipartAlternative = "multipart/alternative"
 const contentTypeMultipartRelated = "multipart/related"
+const contentTypeMultipartSigned = "multipart/signed"
 const contentTypeTextHtml = "text/html"
 const contentTypeTextPlain = "text/plain"
+const contentTypeApplicationPKCS = "application/pkcs7-signature"
 
 // Parse an email message read from io.Reader into parsemail.Email struct
 func Parse(r io.Reader) (email Email, err error) {
@@ -53,6 +56,8 @@ func Parse(r io.Reader) (email Email, err error) {
 		email.TextBody, email.HTMLBody, email.EmbeddedFiles, err = parseMultipartAlternative(msg.Body, params["boundary"])
 	case contentTypeMultipartRelated:
 		email.TextBody, email.HTMLBody, email.EmbeddedFiles, err = parseMultipartRelated(msg.Body, params["boundary"])
+	case contentTypeMultipartSigned:
+		email.TextBody, email.HTMLBody, email.Attachments, email.EmbeddedFiles, err = parseMultipartSigned(msg.Body, params["boundary"])
 	case contentTypeTextPlain:
 		message, _ := ioutil.ReadAll(msg.Body)
 		email.TextBody = strings.TrimSuffix(string(message[:]), "\n")
@@ -167,6 +172,80 @@ func parseMultipartRelated(msg io.Reader, boundary string) (textBody, htmlBody s
 	}
 
 	return textBody, htmlBody, embeddedFiles, err
+}
+
+func parseMultipartSigned(msg io.Reader, boundary string) (textBody, htmlBody string, attachments []Attachment, embeddedFiles []EmbeddedFile, err error) {
+	pmr := multipart.NewReader(msg, boundary)
+	for {
+		part, err := pmr.NextPart()
+
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return textBody, htmlBody, attachments, embeddedFiles, err
+		}
+
+		contentType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+		if err != nil {
+			return textBody, htmlBody, attachments, embeddedFiles, err
+		}
+
+		//fmt.Printf("contentType is %v\n", contentType)
+		switch contentType {
+		case contentTypeTextPlain:
+
+			ppContent, err := ioutil.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			textBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+
+		case contentTypeTextHtml:
+			ppContent, err := ioutil.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+		case contentTypeMultipartAlternative:
+			tb, hb, ef, err := parseMultipartAlternative(part, params["boundary"])
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			htmlBody += hb
+			textBody += tb
+			embeddedFiles = append(embeddedFiles, ef...)
+
+		case contentTypeMultipartMixed:
+			tb, hb, af, ef, err := parseMultipartMixed(part, params["boundary"])
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			htmlBody += hb
+			textBody += tb
+			embeddedFiles = append(embeddedFiles, ef...)
+			attachments = append(attachments, af...)
+
+		case contentTypeApplicationPKCS:
+
+		default:
+			if isEmbeddedFile(part) {
+				ef, err := decodeEmbeddedFile(part)
+				if err != nil {
+					return textBody, htmlBody, attachments, embeddedFiles, err
+				}
+
+				embeddedFiles = append(embeddedFiles, ef)
+			} else {
+				return textBody, htmlBody, attachments, embeddedFiles, fmt.Errorf("can't process multipart/signed inner mime type: %s", contentType)
+			}
+		}
+	}
+
+	return textBody, htmlBody, attachments, embeddedFiles, err
 }
 
 func parseMultipartAlternative(msg io.Reader, boundary string) (textBody, htmlBody string, embeddedFiles []EmbeddedFile, err error) {
