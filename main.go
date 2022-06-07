@@ -82,6 +82,7 @@ var cfg struct {
 	ConvertHeic  bool     `yaml:"convertheic2jpg"`
 	DontRun      bool     `yaml:"dontrun"`
 	KeyWait      bool     `yaml:"debugwait"`
+	AllowBody    bool     `yaml:"allowbody"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -342,6 +343,12 @@ func fetchNewClaims() {
 		}
 
 		f4 := parseSubject(m.Subject, false)
+		if !f4.ok && cfg.AllowBody {
+			f4 = parseSubject(m.TextBody, false)
+			if f4.ok {
+				m.Subject = m.TextBody
+			}
+		}
 
 		ve := validateEntrant(*f4, m.Header.Get("From"))
 		vb := validateBonus(*f4)
@@ -439,6 +446,13 @@ func fetchNewClaims() {
 			skipped.AddNum(msg.Uid)
 			continue
 		}
+		if numphotos < 1 {
+			if !*silent {
+				fmt.Printf("%s skipping %v [%v] no photo\n", logts(), m.Subject, msg.Uid)
+			}
+			dealtwith.AddNum(msg.Uid)
+			continue
+		}
 		if numphotos > 1 {
 			if !*silent {
 				fmt.Printf("%s skipping %v [%v] multiple photos\n", logts(), m.Subject, msg.Uid)
@@ -473,7 +487,9 @@ func fetchNewClaims() {
 			m.Subject, f4.Extra,
 			strictok, photoTime, sentatTime, photoid)
 		if err != nil {
-			fmt.Printf("%s can't store claim - %v\n", logts(), err)
+			if !*silent {
+				fmt.Printf("%s can't store claim - %v\n", logts(), err)
+			}
 			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
 			continue
 
@@ -493,7 +509,9 @@ func fetchNewClaims() {
 	}
 
 	if err := <-done; err != nil {
-		fmt.Printf("%s OMG!! %v\n", logts(), err)
+		if !*silent {
+			fmt.Printf("%s OMG!! %v\n", logts(), err)
+		}
 		return
 	}
 
@@ -583,7 +601,9 @@ func init() {
 	cfg.Path2DB = *path2db
 
 	if cfg.DontRun {
-		fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
+		if !*silent {
+			fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
+		}
 		osExit(0)
 	}
 
@@ -752,7 +772,9 @@ func validateEntrant(f4 fourFields, from string) bool {
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		fmt.Printf("%v No such entrant %v\n", logts(), f4.EntrantID)
+		if !*silent {
+			fmt.Printf("%v No such entrant %v\n", logts(), f4.EntrantID)
+		}
 		return false
 	}
 
@@ -765,7 +787,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 		for _, em := range e {
 			ok = ok || strings.EqualFold(em.Address, v.Address)
 		}
-		if !ok {
+		if !ok && !*silent {
 			fmt.Printf("%v received from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
 		}
 	}
