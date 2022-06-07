@@ -51,7 +51,7 @@ var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster databa
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.4"
+const appversion = "1.5"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
