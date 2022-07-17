@@ -51,7 +51,7 @@ var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster databa
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.5"
+const appversion = "1.6"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -785,7 +785,21 @@ func validateEntrant(f4 fourFields, from string) bool {
 	ok := !cfg.MatchEmail
 	if !ok {
 		for _, em := range e {
+			if *verbose {
+				fmt.Printf("%v comparing %v\n", logts(), em.Address)
+			}
 			ok = ok || strings.EqualFold(em.Address, v.Address)
+			if !ok {
+				f := func(c rune) bool {
+					return c == '@'
+				}
+				a1 := strings.FieldsFunc(em.Address, f)
+				a2 := strings.FieldsFunc(v.Address, f)
+				ok = strings.EqualFold(a1[0], a2[0]) // Compare only the 'account' port of the address
+				if ok && !*silent {
+					fmt.Printf("%v matched email from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
+				}
+			}
 		}
 		if !ok && !*silent {
 			fmt.Printf("%v received from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
