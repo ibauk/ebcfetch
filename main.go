@@ -7,7 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/mail"
 	"os"
@@ -49,9 +49,10 @@ var yml = flag.String("cfg", "", "Path of YAML config file")
 var showusage = flag.Bool("?", false, "Show this help text")
 var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster database")
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
+var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.6"
+const appversion = "1.7"
 const timefmt = time.RFC3339
 
 var dbh *sql.DB
@@ -83,6 +84,9 @@ var cfg struct {
 	DontRun      bool     `yaml:"dontrun"`
 	KeyWait      bool     `yaml:"debugwait"`
 	AllowBody    bool     `yaml:"allowbody"`
+	TrapMails    bool     `yaml:"trapmails"`
+	TrapPath     string   `yaml:"trappath"`
+	TestMode     bool     `yaml:"testmode"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -95,6 +99,25 @@ type fourFields struct {
 	TimeHH     int
 	TimeMM     int
 	Extra      string
+}
+
+// testResponse contains the response to be sent to the sender when
+// running in TestMode. This gives detailed feedback on the test
+// email received.
+type testResponse struct {
+	AddressIsRegistered bool   // Sender's email is registered for rally
+	ClaimSubject        string // The claim string retrieved from Subject or body
+	SubjectFromBody     bool
+	PhotoPresent        bool
+	EntrantID           int
+	BonusID             string
+	BonusIsReal         bool
+	OdoReading          int
+	ClaimDateTime       time.Time
+	ExtraField          string
+	Commentary          string
+	ClaimIsGood         bool
+	ClaimIsPerfect      bool
 }
 
 const myTimeFormat = "2006-01-02 15:04:05"
@@ -331,9 +354,11 @@ func fetchNewClaims() {
 
 	for msg := range messages {
 
+		var TR testResponse
+
 		r := msg.GetBody(section) // This automatically marks the message as 'read'
 		if r == nil {
-			log.Println("Server didn't returned message body")
+			log.Println("Server didn't return message body")
 			continue
 		}
 		m, err := Parse(r)
@@ -342,16 +367,32 @@ func fetchNewClaims() {
 			continue
 		}
 
+		if cfg.TrapMails && cfg.TrapPath != "" {
+			fmt.Printf("INCOMING: %v\n", m)
+		}
+
 		f4 := parseSubject(m.Subject, false)
 		if !f4.ok && cfg.AllowBody {
 			f4 = parseSubject(m.TextBody, false)
 			if f4.ok {
 				m.Subject = m.TextBody
+				TR.SubjectFromBody = true
 			}
 		}
 
+		TR.ClaimSubject = m.Subject
+		TR.EntrantID = f4.EntrantID
+		TR.BonusID = f4.BonusID
+		TR.OdoReading = f4.OdoReading
+		TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
+		TR.ExtraField = f4.Extra
+
 		ve := validateEntrant(*f4, m.Header.Get("From"))
+		TR.AddressIsRegistered = ve
+
 		vb := validateBonus(*f4)
+		TR.BonusIsReal = vb
+
 		if !f4.ok || !ve || !vb {
 			if !*silent {
 				okx := "ok"
@@ -373,11 +414,14 @@ func fetchNewClaims() {
 			continue
 		}
 
+		TR.ClaimIsGood = true
+
 		var strictok bool = true
-		if cfg.CheckStrict {
+		if cfg.CheckStrict || cfg.TestMode {
 			f5 := parseSubject(m.Subject, true)
 			strictok = f5.ok
 		}
+		TR.ClaimIsPerfect = strictok
 
 		var photoid int = 0
 		var photoTime time.Time
@@ -392,7 +436,7 @@ func fetchNewClaims() {
 			if pt.After(photoTime) {
 				photoTime = pt
 			}
-			pix, err := ioutil.ReadAll(a.Data)
+			pix, err := io.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s attachment error %v\n", logts(), err)
@@ -420,7 +464,7 @@ func fetchNewClaims() {
 			if pt.After(photoTime) {
 				photoTime = pt
 			}
-			pix, err := ioutil.ReadAll(a.Data)
+			pix, err := io.ReadAll(a.Data)
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s embedding error %v\n", logts(), err)
@@ -441,6 +485,8 @@ func fetchNewClaims() {
 				fmt.Printf("%s photo: %v\n", logts(), pt.Format(myTimeFormat))
 			}
 		}
+
+		TR.PhotoPresent = photosok && numphotos == 1
 
 		if !photosok {
 			skipped.AddNum(msg.Uid)
@@ -618,6 +664,11 @@ func init() {
 		osExit(1)
 	}
 
+	if *trapmails != "" {
+		cfg.TrapPath = *trapmails
+		cfg.TrapMails = true
+	}
+
 	cfg.StrictRE = regexp.MustCompile(cfg.Strict)
 	cfg.SubjectRE = regexp.MustCompile(cfg.Subject)
 
@@ -783,7 +834,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 	v, _ := mail.ParseAddress(from)
 	e, _ := mail.ParseAddressList(Email)
 	ok := !cfg.MatchEmail
-	if !ok {
+	if !ok || cfg.TestMode {
 		for _, em := range e {
 			if *verbose {
 				fmt.Printf("%v comparing %v\n", logts(), em.Address)
@@ -837,7 +888,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	row.Scan(&photoid)
 
 	x := filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
-	err = ioutil.WriteFile(x, pic, 0644)
+	err = os.WriteFile(x, pic, 0644)
 	if err != nil {
 		fmt.Printf("%v can't write image %v - error:%v\n", logts(), x, err)
 		dbh.Exec("ROLLBACK")
