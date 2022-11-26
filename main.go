@@ -20,6 +20,8 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	smtp "github.com/xhit/go-simple-mail/v2"
+
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	_ "github.com/mattn/go-sqlite3"
@@ -55,38 +57,47 @@ const apptitle = "EBCFetch"
 const appversion = "1.7"
 const timefmt = time.RFC3339
 
+const ResponseStyleYes = ` font-size: large; color: green; `
+const ResponseStyleNo = ` font-size: x-large; color: red; `
+const ResponseStyleLbl = ` text-align: right; padding-right: 1em; `
+
 var dbh *sql.DB
 
 var cfg struct {
-	ImapServer   string    `yaml:"imapserver"`
-	ImapLogin    string    `yaml:"login"`
-	ImapPassword string    `yaml:"password"`
-	NotBefore    time.Time `yaml:"notbefore,omitempty"`
-	NotAfter     time.Time `yaml:"notafter,omitempty"`
-	Path2DB      string    `yaml:"db"`
-	Subject      string    `yaml:"subject"`
-	Strict       string    `yaml:"strict"`
-	SubjectRE    *regexp.Regexp
-	StrictRE     *regexp.Regexp
-	RallyTitle   string
-	RallyStart   time.Time
-	RallyFinish  time.Time
-	LocalTZ      *time.Location
-	OffsetTZ     string
-	SelectFlags  []string `yaml:"selectflags"`
-	CheckStrict  bool     `yaml:"checkstrict"`
-	SleepSeconds int      `yaml:"sleepseconds"`
-	Path2SM      string   `yaml:"path2sm"`
-	ImageFolder  string   `yaml:"imagefolder"`
-	MatchEmail   bool     `yaml:"matchemail"`
-	Heic2jpg     string   `yaml:"heic2jpg"`
-	ConvertHeic  bool     `yaml:"convertheic2jpg"`
-	DontRun      bool     `yaml:"dontrun"`
-	KeyWait      bool     `yaml:"debugwait"`
-	AllowBody    bool     `yaml:"allowbody"`
-	TrapMails    bool     `yaml:"trapmails"`
-	TrapPath     string   `yaml:"trappath"`
-	TestMode     bool     `yaml:"testmode"`
+	ImapServer       string    `yaml:"imapserver"`
+	ImapLogin        string    `yaml:"login"`
+	ImapPassword     string    `yaml:"password"`
+	NotBefore        time.Time `yaml:"notbefore,omitempty"`
+	NotAfter         time.Time `yaml:"notafter,omitempty"`
+	Path2DB          string    `yaml:"db"`
+	Subject          string    `yaml:"subject"`
+	Strict           string    `yaml:"strict"`
+	SubjectRE        *regexp.Regexp
+	StrictRE         *regexp.Regexp
+	RallyTitle       string
+	RallyStart       time.Time
+	RallyFinish      time.Time
+	LocalTZ          *time.Location
+	OffsetTZ         string
+	SelectFlags      []string `yaml:"selectflags"`
+	CheckStrict      bool     `yaml:"checkstrict"`
+	SleepSeconds     int      `yaml:"sleepseconds"`
+	Path2SM          string   `yaml:"path2sm"`
+	ImageFolder      string   `yaml:"imagefolder"`
+	MatchEmail       bool     `yaml:"matchemail"`
+	Heic2jpg         string   `yaml:"heic2jpg"`
+	ConvertHeic      bool     `yaml:"convertheic2jpg"`
+	DontRun          bool     `yaml:"dontrun"`
+	KeyWait          bool     `yaml:"debugwait"`
+	AllowBody        bool     `yaml:"allowbody"`
+	TrapMails        bool     `yaml:"trapmails"`
+	TrapPath         string   `yaml:"trappath"`
+	TestMode         bool     `yaml:"testmode"`
+	SMTPServer       string   `yaml:"SMTPServer"`
+	SMTPUser         string   `yaml:"SMTPUser"`
+	SMTPPassword     string   `yaml:"SMTPPassword"`
+	TestResponseGood string   `yaml:"TestResponseGood"`
+	TestResponseBad  string   `yaml:"TestResponseBad"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -96,6 +107,7 @@ type fourFields struct {
 	EntrantID  int
 	BonusID    string
 	OdoReading int
+	HHmm       string
 	TimeHH     int
 	TimeMM     int
 	Extra      string
@@ -108,11 +120,13 @@ type testResponse struct {
 	AddressIsRegistered bool   // Sender's email is registered for rally
 	ClaimSubject        string // The claim string retrieved from Subject or body
 	SubjectFromBody     bool
-	PhotoPresent        bool
+	PhotoPresent        int
 	EntrantID           int
 	BonusID             string
 	BonusIsReal         bool
+	BonusDesc           string
 	OdoReading          int
+	HHmm                string
 	ClaimDateTime       time.Time
 	ExtraField          string
 	Commentary          string
@@ -252,22 +266,22 @@ func calcOffsetString(t time.Time) string {
 
 }
 
-func fetchBonus(b string, t string) (bool, int) {
+func fetchBonus(b string, t string) (string, int) {
 
 	rows, err := dbh.Query("SELECT BriefDesc,Points FROM "+t+" WHERE BonusID=?", b)
 	if err != nil {
 		fmt.Printf("%s Bonus! %v %v\n", logts(), b, err)
-		return false, 0
+		return "", 0
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return false, 0
+		return "", 0
 	}
 
 	var BriefDesc string
 	var Points int
 	rows.Scan(&BriefDesc, &Points)
-	return BriefDesc != "", Points
+	return BriefDesc, Points
 
 }
 
@@ -385,15 +399,17 @@ func fetchNewClaims() {
 		TR.BonusID = f4.BonusID
 		TR.OdoReading = f4.OdoReading
 		TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
+		TR.HHmm = f4.HHmm
 		TR.ExtraField = f4.Extra
 
 		ve := validateEntrant(*f4, m.Header.Get("From"))
 		TR.AddressIsRegistered = ve
 
 		vb := validateBonus(*f4)
-		TR.BonusIsReal = vb
+		TR.BonusIsReal = vb != ""
+		TR.BonusDesc = vb
 
-		if !f4.ok || !ve || !vb {
+		if !f4.ok || !ve || vb == "" {
 			if !*silent {
 				okx := "ok"
 				if !f4.ok {
@@ -404,29 +420,33 @@ func fetchNewClaims() {
 					vex = "FALSE"
 				}
 				vbx := "ok"
-				if !vb {
+				if vb == "" {
 					vbx = "FALSE"
 				}
 				//fmt.Printf("F4: E{%v} B{%v} O{%v} T{%v:%v}\n", f4.EntrantID, f4.BonusID, f4.OdoReading, f4.TimeHH, f4.TimeMM)
 				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, okx, vex, vbx)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
-			continue
-		}
+			if !cfg.TestMode {
+				continue
+			}
+		} else {
 
-		TR.ClaimIsGood = true
+			TR.ClaimIsGood = true
+		}
 
 		var strictok bool = true
 		if cfg.CheckStrict || cfg.TestMode {
 			f5 := parseSubject(m.Subject, true)
 			strictok = f5.ok
 		}
-		TR.ClaimIsPerfect = strictok
+		TR.ClaimIsPerfect = TR.ClaimIsGood && strictok
 
 		var photoid int = 0
 		var photoTime time.Time
 		var numphotos int = 0
 		var photosok bool = true
+		var writefailure bool = false
 		for _, a := range m.Attachments {
 			if *verbose {
 				fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
@@ -447,6 +467,7 @@ func fetchNewClaims() {
 				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, string(a.Filename))
 				if photoid == 0 {
 					photosok = false
+					writefailure = true
 					break
 				}
 				if *verbose {
@@ -486,25 +507,43 @@ func fetchNewClaims() {
 			}
 		}
 
-		TR.PhotoPresent = photosok && numphotos == 1
+		if photosok {
+			TR.PhotoPresent = numphotos
+		} else if numphotos > 0 {
+			TR.PhotoPresent = 0 - numphotos
+		}
 
 		if !photosok {
 			skipped.AddNum(msg.Uid)
-			continue
+			if !cfg.TestMode || writefailure {
+				continue
+			}
 		}
-		if numphotos < 1 {
+		if photosok && numphotos < 1 {
 			if !*silent {
 				fmt.Printf("%s skipping %v [%v] no photo\n", logts(), m.Subject, msg.Uid)
 			}
 			dealtwith.AddNum(msg.Uid)
-			continue
+			if !cfg.TestMode || writefailure {
+				continue
+			}
 		}
-		if numphotos > 1 {
+		if photosok && numphotos > 1 {
 			if !*silent {
 				fmt.Printf("%s skipping %v [%v] multiple photos\n", logts(), m.Subject, msg.Uid)
 			}
 			dealtwith.AddNum(msg.Uid)
-			continue
+			if !cfg.TestMode || writefailure {
+				continue
+			}
+		}
+
+		if cfg.TestMode {
+			sendTestResponse(TR, m.Header.Get("From"))
+			if !TR.ClaimIsGood || !photosok || numphotos != 1 {
+				continue
+			}
+
 		}
 
 		var sentatTime time.Time = msg.InternalDate
@@ -611,6 +650,10 @@ func init() {
 	if *showusage {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if !*silent {
+		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
 	}
 
 	if *path2db == "" {
@@ -727,10 +770,11 @@ func logts() string {
 }
 
 func main() {
+
 	if !*silent {
-		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
 		fmt.Printf("%v: Monitoring %v for %v\n", apptitle, cfg.ImapLogin, cfg.RallyTitle)
 	}
+
 	for {
 		fetchNewClaims()
 		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
@@ -788,6 +832,7 @@ func parseSubject(s string, formal bool) *fourFields {
 	}
 	f4.OdoReading, _ = strconv.Atoi(ff[3])
 	hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
+	f4.HHmm = hmx
 	hm, _ := strconv.Atoi(hmx)
 	f4.TimeHH = hm / 100
 	f4.TimeMM = hm % 100
@@ -799,13 +844,93 @@ func parseSubject(s string, formal bool) *fourFields {
 	return &f4
 }
 
+/*
+sendTestResponse generates and sends a narrative email to the sender
+of any emails received while cfg.TestMode is true.
+*/
+func yesno(x bool) string {
+	if x {
+		return ` <span style="` + ResponseStyleYes + `">&#x2714;</span>`
+	}
+	return ` <span style="` + ResponseStyleNo + `">&#x2718;</span>`
+}
+
+func sendTestResponse(tr testResponse, from string) {
+
+	var sb strings.Builder
+
+	if tr.ClaimIsGood && tr.PhotoPresent > 0 {
+		sb.WriteString("<p>" + cfg.TestResponseGood + "</p>")
+	} else {
+		sb.WriteString("<p>" + cfg.TestResponseBad + "</p>")
+	}
+	sb.WriteString("<table>")
+	sb.WriteString(`<tr><td style="` + ResponseStyleLbl + `">Subject</td><td>`)
+	sb.WriteString(tr.ClaimSubject)
+	if tr.SubjectFromBody {
+		sb.WriteString(" &#x2611;")
+	}
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant<td>`)
+	sb.WriteString(yesno(tr.AddressIsRegistered))
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Photo</td><td>`)
+	sb.WriteString(strconv.Itoa(tr.PhotoPresent))
+
+	sb.WriteString(yesno(tr.PhotoPresent > 0))
+
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Bonus</td><td>`)
+	sb.WriteString(tr.BonusID)
+	if tr.BonusIsReal {
+		sb.WriteString(" - ")
+		sb.WriteString(tr.BonusDesc)
+	} else {
+		sb.WriteString(yesno(false))
+	}
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Odo</td><td>`)
+	sb.WriteString(strconv.Itoa(tr.OdoReading))
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">hhmm(` + tr.HHmm + `)</td><td>`)
+	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate))
+	if tr.ExtraField != "" {
+		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">&#x270D;</td><td>`)
+		sb.WriteString(tr.ExtraField)
+	}
+	sb.WriteString("</td></tr></table>")
+
+	client := smtp.NewSMTPClient()
+	client.Host = cfg.SMTPServer
+	client.Port = 587
+	client.Username = cfg.SMTPUser
+	client.Password = cfg.SMTPPassword
+	client.Encryption = smtp.EncryptionTLS
+	client.ConnectTimeout = 10 * time.Second
+	client.SendTimeout = 10 * time.Second
+	client.KeepAlive = false
+
+	conn, err := client.Connect()
+	if err != nil {
+		fmt.Printf("Can't connect to %v because %v\n", client.Host, err)
+		return
+	}
+	msg := smtp.NewMSG()
+	msg.AddTo(from)
+	msg.SetFrom(cfg.ImapLogin)
+	if tr.ClaimIsGood && tr.PhotoPresent > 0 {
+		msg.SetSubject("EBCFetch: " + cfg.TestResponseGood)
+	} else {
+		msg.SetSubject("EBCFetch: " + cfg.TestResponseBad)
+	}
+
+	msg.SetBody(smtp.TextHTML, sb.String())
+
+	msg.Send(conn)
+}
+
 func storeTimeDB(t time.Time) string {
 
 	res := t.Local().Format(timefmt)
 	return res
 }
 
-func validateBonus(f4 fourFields) bool {
+func validateBonus(f4 fourFields) string {
 
 	// We actually don't care about the points so drop them
 
@@ -835,6 +960,9 @@ func validateEntrant(f4 fourFields, from string) bool {
 	e, _ := mail.ParseAddressList(Email)
 	ok := !cfg.MatchEmail
 	if !ok || cfg.TestMode {
+		if cfg.TestMode {
+			ok = false
+		}
 		for _, em := range e {
 			if *verbose {
 				fmt.Printf("%v comparing %v\n", logts(), em.Address)
