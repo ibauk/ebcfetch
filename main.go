@@ -1,5 +1,26 @@
-// EBCFetch:
-// I fetch bonus claims from email and store in ScoreMaster database
+/*
+ * I B A U K   -   S C O R E M A S T E R
+ *
+ * I fetch bonus claims from email and store in ScoreMaster database
+ *
+ * I am written for readability rather than efficiency, please keep me that way.
+ *
+ *
+ * Copyright (c) 2020 Bob Stammers
+ *
+ *
+ * This file is part of IBAUK-SCOREMASTER.
+ *
+ * IBAUK-SCOREMASTER is free software: you can redistribute it and/or modify
+ * it under the terms of the MIT License
+ *
+ * IBAUK-SCOREMASTER is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MIT License for more details.
+ *
+ */
+
 package main
 
 import (
@@ -57,47 +78,51 @@ const apptitle = "EBCFetch"
 const appversion = "1.7"
 const timefmt = time.RFC3339
 
-const ResponseStyleYes = ` font-size: large; color: green; `
+const ResponseStyleYes = ` font-size: large; color: lightgreen; `
 const ResponseStyleNo = ` font-size: x-large; color: red; `
 const ResponseStyleLbl = ` text-align: right; padding-right: 1em; `
 
 var dbh *sql.DB
 
 var cfg struct {
-	ImapServer       string    `yaml:"imapserver"`
-	ImapLogin        string    `yaml:"login"`
-	ImapPassword     string    `yaml:"password"`
-	NotBefore        time.Time `yaml:"notbefore,omitempty"`
-	NotAfter         time.Time `yaml:"notafter,omitempty"`
-	Path2DB          string    `yaml:"db"`
-	Subject          string    `yaml:"subject"`
-	Strict           string    `yaml:"strict"`
-	SubjectRE        *regexp.Regexp
-	StrictRE         *regexp.Regexp
-	RallyTitle       string
-	RallyStart       time.Time
-	RallyFinish      time.Time
-	LocalTZ          *time.Location
-	OffsetTZ         string
-	SelectFlags      []string `yaml:"selectflags"`
-	CheckStrict      bool     `yaml:"checkstrict"`
-	SleepSeconds     int      `yaml:"sleepseconds"`
-	Path2SM          string   `yaml:"path2sm"`
-	ImageFolder      string   `yaml:"imagefolder"`
-	MatchEmail       bool     `yaml:"matchemail"`
-	Heic2jpg         string   `yaml:"heic2jpg"`
-	ConvertHeic      bool     `yaml:"convertheic2jpg"`
-	DontRun          bool     `yaml:"dontrun"`
-	KeyWait          bool     `yaml:"debugwait"`
-	AllowBody        bool     `yaml:"allowbody"`
-	TrapMails        bool     `yaml:"trapmails"`
-	TrapPath         string   `yaml:"trappath"`
-	TestMode         bool     `yaml:"testmode"`
-	SMTPServer       string   `yaml:"SMTPServer"`
-	SMTPUser         string   `yaml:"SMTPUser"`
-	SMTPPassword     string   `yaml:"SMTPPassword"`
-	TestResponseGood string   `yaml:"TestResponseGood"`
-	TestResponseBad  string   `yaml:"TestResponseBad"`
+	ImapServer         string    `yaml:"imapserver"`
+	ImapLogin          string    `yaml:"login"`
+	ImapPassword       string    `yaml:"password"`
+	NotBefore          time.Time `yaml:"notbefore,omitempty"`
+	NotAfter           time.Time `yaml:"notafter,omitempty"`
+	Path2DB            string    `yaml:"db"`
+	Subject            string    `yaml:"subject"`
+	Strict             string    `yaml:"strict"`
+	SubjectRE          *regexp.Regexp
+	StrictRE           *regexp.Regexp
+	RallyTitle         string
+	RallyStart         time.Time
+	RallyFinish        time.Time
+	LocalTZ            *time.Location
+	OffsetTZ           string
+	SelectFlags        []string `yaml:"selectflags"`
+	CheckStrict        bool     `yaml:"checkstrict"`
+	SleepSeconds       int      `yaml:"sleepseconds"`
+	Path2SM            string   `yaml:"path2sm"`
+	ImageFolder        string   `yaml:"imagefolder"`
+	MatchEmail         bool     `yaml:"matchemail"`
+	Heic2jpg           string   `yaml:"heic2jpg"`
+	ConvertHeic        bool     `yaml:"convertheic2jpg"`
+	DontRun            bool     `yaml:"dontrun"`
+	KeyWait            bool     `yaml:"debugwait"`
+	AllowBody          bool     `yaml:"allowbody"`
+	TrapMails          bool     `yaml:"trapmails"`
+	TrapPath           string   `yaml:"trappath"`
+	TestMode           bool     `yaml:"testmode"`
+	SMTPServer         string   `yaml:"SMTPServer"`
+	SMTPUser           string   `yaml:"SMTPUser"`
+	SMTPPassword       string   `yaml:"SMTPPassword"`
+	TestModeLiteral    string   `yaml:"TestModeLiteral"`
+	TestResponseGood   string   `yaml:"TestResponseGood"`
+	TestResponseBad    string   `yaml:"TestResponseBad"`
+	TestResponseAdvice string   `yaml:"TestResponseAdvice"`
+	TestResponseBCC    string   `yaml:"TestResponseBCC"`
+	MaxExtraPhotos     int      `yaml:"MaxExtraPhotos"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -107,7 +132,9 @@ type fourFields struct {
 	EntrantID  int
 	BonusID    string
 	OdoReading int
+	OdoOk      bool
 	HHmm       string
+	TimeOk     bool
 	TimeHH     int
 	TimeMM     int
 	Extra      string
@@ -303,7 +330,7 @@ func fetchNewClaims() {
 	// Connect to server
 	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
-		log.Println(err)
+		log.Printf("DialTLS: %v\n", err)
 		return
 	}
 
@@ -312,14 +339,14 @@ func fetchNewClaims() {
 
 	// Login
 	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
-		log.Println(err)
+		log.Printf("Login: %v\n", err)
 		return
 	}
 
 	// Select INBOX
 	_, err = c.Select("INBOX", false)
 	if err != nil {
-		log.Println(err)
+		log.Printf("Select: %v\n", err)
 		return
 	}
 	criteria := imap.NewSearchCriteria()
@@ -332,22 +359,24 @@ func fetchNewClaims() {
 		criteria.SentBefore = cfg.NotAfter
 	}
 
-	if *verbose {
-		fmt.Printf("%s searching ... ", logts())
-	}
+	//	if *verbose {
+	//		fmt.Printf("%s searching ... ", logts())
+	//	}
 	uids, err := c.Search(criteria)
 	if err != nil {
-		log.Println(err)
+		log.Printf("Search: %v\n", err)
 	}
-	if *verbose {
-		fmt.Printf("%s ok\n", logts())
-	}
+	//	if *verbose {
+	//		fmt.Printf("%s ok\n", logts())
+	//	}
 
+	// Collect the unique IDs of messages found
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(uids...)
-	if seqset.Empty() {
+	if seqset.Empty() { // Didn't find any messages so we're done
 		return
 	}
+
 	if *verbose {
 		fmt.Printf("%s fetching %v message(s)\n", logts(), len(uids))
 	}
@@ -356,15 +385,14 @@ func fetchNewClaims() {
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchUid, imap.FetchInternalDate}
 
-	messages := make(chan *imap.Message, 10)
+	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
-	autoclaimed := new(imap.SeqSet)
-	skipped := new(imap.SeqSet)
-	dealtwith := new(imap.SeqSet)
+	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
+	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
 	for msg := range messages {
 
@@ -405,11 +433,14 @@ func fetchNewClaims() {
 		ve := validateEntrant(*f4, m.Header.Get("From"))
 		TR.AddressIsRegistered = ve
 
+		// If ve is false then I don't know who the entrant is so I must not create a claim in ScoreMaster
+		// In TestMode we do want to process the email and respond even though ve is false
+
 		vb := validateBonus(*f4)
 		TR.BonusIsReal = vb != ""
 		TR.BonusDesc = vb
 
-		if !f4.ok || !ve || vb == "" {
+		if !ve {
 			if !*silent {
 				okx := "ok"
 				if !f4.ok {
@@ -423,7 +454,6 @@ func fetchNewClaims() {
 				if vb == "" {
 					vbx = "FALSE"
 				}
-				//fmt.Printf("F4: E{%v} B{%v} O{%v} T{%v:%v}\n", f4.EntrantID, f4.BonusID, f4.OdoReading, f4.TimeHH, f4.TimeMM)
 				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, okx, vex, vbx)
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
@@ -432,7 +462,8 @@ func fetchNewClaims() {
 			}
 		} else {
 
-			TR.ClaimIsGood = true
+			TR.ClaimIsGood = f4.ok && ve && vb != ""
+
 		}
 
 		var strictok bool = true
@@ -446,7 +477,6 @@ func fetchNewClaims() {
 		var photoTime time.Time
 		var numphotos int = 0
 		var photosok bool = true
-		var writefailure bool = false
 		for _, a := range m.Attachments {
 			if *verbose {
 				fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
@@ -465,9 +495,8 @@ func fetchNewClaims() {
 				}
 			} else {
 				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, string(a.Filename))
-				if photoid == 0 {
+				if photoid == 0 && !cfg.TestMode {
 					photosok = false
-					writefailure = true
 					break
 				}
 				if *verbose {
@@ -494,7 +523,7 @@ func fetchNewClaims() {
 				}
 			} else {
 				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, a.ContentDisposition)
-				if photoid == 0 {
+				if photoid == 0 && !cfg.TestMode {
 					photosok = false
 					break
 				}
@@ -513,37 +542,8 @@ func fetchNewClaims() {
 			TR.PhotoPresent = 0 - numphotos
 		}
 
-		if !photosok {
-			skipped.AddNum(msg.Uid)
-			if !cfg.TestMode || writefailure {
-				continue
-			}
-		}
-		if photosok && numphotos < 1 {
-			if !*silent {
-				fmt.Printf("%s skipping %v [%v] no photo\n", logts(), m.Subject, msg.Uid)
-			}
-			dealtwith.AddNum(msg.Uid)
-			if !cfg.TestMode || writefailure {
-				continue
-			}
-		}
-		if photosok && numphotos > 1 {
-			if !*silent {
-				fmt.Printf("%s skipping %v [%v] multiple photos\n", logts(), m.Subject, msg.Uid)
-			}
-			dealtwith.AddNum(msg.Uid)
-			if !cfg.TestMode || writefailure {
-				continue
-			}
-		}
-
-		if cfg.TestMode {
-			sendTestResponse(TR, m.Header.Get("From"))
-			if !TR.ClaimIsGood || !photosok || numphotos != 1 {
-				continue
-			}
-
+		if numphotos != 1 {
+			photoid = 0 // Make ScoreMaster hunt for photos
 		}
 
 		var sentatTime time.Time = msg.InternalDate
@@ -560,38 +560,36 @@ func fetchNewClaims() {
 			}
 		}
 
-		var sb strings.Builder
-		sb.WriteString("INSERT INTO ebclaims (LoggedAt,DateTime,EntrantID,BonusID,OdoReading,")
-		sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
-		sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
-		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-		_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
-			f4.EntrantID, f4.BonusID, f4.OdoReading,
-			storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
-			storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
-			m.Subject, f4.Extra,
-			strictok, photoTime, sentatTime, photoid)
-		if err != nil {
-			if !*silent {
-				fmt.Printf("%s can't store claim - %v\n", logts(), err)
-			}
-			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
+		if cfg.TestMode {
+			sendTestResponse(TR, m.Header.Get("From"), f4)
 			continue
+		} else {
 
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO ebclaims (LoggedAt,DateTime,EntrantID,BonusID,OdoReading,")
+			sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
+			sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
+			sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+			_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
+				f4.EntrantID, f4.BonusID, f4.OdoReading,
+				storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
+				storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
+				m.Subject, f4.Extra,
+				strictok, photoTime, sentatTime, photoid)
+			if err != nil {
+				if !*silent {
+					fmt.Printf("%s can't store claim - %v\n", logts(), err)
+				}
+				skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
+				continue
+
+			}
 		}
 		if !*silent {
-			fmt.Printf("%s claiming %v\n", logts(), m.Subject)
+			fmt.Printf("%s claiming [ %v ]\n", logts(), m.Subject)
 		}
-		autoclaimed.AddNum(msg.Uid)
 
-		if *verbose {
-			var sok string = "!strictF4"
-			if strictok {
-				sok = "strictF4 ok"
-			}
-			fmt.Printf("%s %v  [msg.Uid %v] = %v\n", logts(), m.Subject, msg.Uid, sok)
-		}
-	}
+	} // End msg loop
 
 	if err := <-done; err != nil {
 		if !*silent {
@@ -600,14 +598,7 @@ func fetchNewClaims() {
 		return
 	}
 
-	if !autoclaimed.Empty() {
-		item := imap.FormatFlagsOp(imap.AddFlags, true)
-		flags := []interface{}{imap.FlaggedFlag, imap.SeenFlag}
-		if *verbose {
-			fmt.Printf("%s claimed %v %v %v\n", logts(), autoclaimed, item, flags)
-		}
-	}
-	if !dealtwith.Empty() {
+	if !dealtwith.Empty() && !cfg.TestMode {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{imap.FlaggedFlag}
 		if *verbose {
@@ -619,7 +610,7 @@ func fetchNewClaims() {
 			return
 		}
 	}
-	if !skipped.Empty() { // These are not yet dealt with
+	if !skipped.Empty() && !cfg.TestMode { // These are not yet dealt with
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{}
 		if *verbose {
@@ -831,11 +822,17 @@ func parseSubject(s string, formal bool) *fourFields {
 		return &f4
 	}
 	f4.OdoReading, _ = strconv.Atoi(ff[3])
+	OdoRE := regexp.MustCompile(`^\d+$`)
+	f4.OdoOk = OdoRE.MatchString(ff[3])
+
 	hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
+
 	f4.HHmm = hmx
+	TimeRE := regexp.MustCompile(`^\d\d\d\d$`)
 	hm, _ := strconv.Atoi(hmx)
 	f4.TimeHH = hm / 100
 	f4.TimeMM = hm % 100
+	f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
 
 	if len(ff) > 5 {
 		f4.Extra = ff[5]
@@ -843,6 +840,15 @@ func parseSubject(s string, formal bool) *fourFields {
 
 	return &f4
 }
+
+/*
+func processSingleMessage(m Email,emailid uint32,msgtime time.Time) {
+
+
+
+}
+
+*/
 
 /*
 sendTestResponse generates and sends a narrative email to the sender
@@ -855,15 +861,19 @@ func yesno(x bool) string {
 	return ` <span style="` + ResponseStyleNo + `">&#x2718;</span>`
 }
 
-func sendTestResponse(tr testResponse, from string) {
+func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 
 	var sb strings.Builder
 
-	if tr.ClaimIsGood && tr.PhotoPresent > 0 {
-		sb.WriteString("<p>" + cfg.TestResponseGood + "</p>")
+	maxphoto := 1 + cfg.MaxExtraPhotos
+
+	if tr.ClaimIsGood && tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto {
+		sb.WriteString("<p>" + cfg.TestResponseGood)
 	} else {
-		sb.WriteString("<p>" + cfg.TestResponseBad + "</p>")
+		sb.WriteString("<p>" + cfg.TestResponseBad)
 	}
+	sb.WriteString((" [ " + cfg.RallyTitle + " " + cfg.TestModeLiteral + " ]</p>"))
+
 	sb.WriteString("<table>")
 	sb.WriteString(`<tr><td style="` + ResponseStyleLbl + `">Subject</td><td>`)
 	sb.WriteString(tr.ClaimSubject)
@@ -873,27 +883,41 @@ func sendTestResponse(tr testResponse, from string) {
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant<td>`)
 	sb.WriteString(yesno(tr.AddressIsRegistered))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Photo</td><td>`)
-	sb.WriteString(strconv.Itoa(tr.PhotoPresent))
 
-	sb.WriteString(yesno(tr.PhotoPresent > 0))
+	if tr.PhotoPresent > 1 {
+		sb.WriteString(` x ` + strconv.Itoa(tr.PhotoPresent) + " ")
+	}
+
+	sb.WriteString(yesno(tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto))
+
+	if tr.PhotoPresent > maxphoto {
+		sb.WriteString("  max=" + strconv.Itoa(maxphoto))
+	}
 
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Bonus</td><td>`)
 	sb.WriteString(tr.BonusID)
 	if tr.BonusIsReal {
 		sb.WriteString(" - ")
 		sb.WriteString(tr.BonusDesc)
+		sb.WriteString(yesno(true))
 	} else {
 		sb.WriteString(yesno(false))
 	}
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Odo</td><td>`)
-	sb.WriteString(strconv.Itoa(tr.OdoReading))
-	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">hhmm(` + tr.HHmm + `)</td><td>`)
-	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate))
+	sb.WriteString(strconv.Itoa(tr.OdoReading) + yesno(f4.OdoOk))
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">hhmm '` + tr.HHmm + `'</td><td>`)
+	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate) + yesno(f4.TimeOk))
 	if tr.ExtraField != "" {
 		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">&#x270D;</td><td>`)
 		sb.WriteString(tr.ExtraField)
 	}
 	sb.WriteString("</td></tr></table>")
+
+	if cfg.TestResponseAdvice != "" {
+		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
+	}
+
+	sb.WriteString("<p>" + apptitle + " v" + appversion + "</p>")
 
 	client := smtp.NewSMTPClient()
 	client.Host = cfg.SMTPServer
@@ -912,16 +936,20 @@ func sendTestResponse(tr testResponse, from string) {
 	}
 	msg := smtp.NewMSG()
 	msg.AddTo(from)
+	if cfg.TestResponseBCC != "" {
+		msg.AddBcc(cfg.TestResponseBCC)
+	}
 	msg.SetFrom(cfg.ImapLogin)
-	if tr.ClaimIsGood && tr.PhotoPresent > 0 {
-		msg.SetSubject("EBCFetch: " + cfg.TestResponseGood)
+	if tr.ClaimIsGood && tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto {
+		msg.SetSubject(apptitle + ": " + cfg.TestResponseGood)
 	} else {
-		msg.SetSubject("EBCFetch: " + cfg.TestResponseBad)
+		msg.SetSubject(apptitle + ": " + cfg.TestResponseBad)
 	}
 
 	msg.SetBody(smtp.TextHTML, sb.String())
 
 	msg.Send(conn)
+	fmt.Printf("%v sending test response to %v\n", logts(), from)
 }
 
 func storeTimeDB(t time.Time) string {
@@ -956,8 +984,8 @@ func validateEntrant(f4 fourFields, from string) bool {
 
 	var RiderName, Email string
 	rows.Scan(&RiderName, &Email)
-	v, _ := mail.ParseAddress(from)
-	e, _ := mail.ParseAddressList(Email)
+	v, _ := mail.ParseAddress(from)      // where the email is sent from
+	e, _ := mail.ParseAddressList(Email) // addresses known for this entrant
 	ok := !cfg.MatchEmail
 	if !ok || cfg.TestMode {
 		if cfg.TestMode {
@@ -965,7 +993,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 		}
 		for _, em := range e {
 			if *verbose {
-				fmt.Printf("%v comparing %v\n", logts(), em.Address)
+				fmt.Printf("%v comparing %v with %v\n", logts(), v.Address, em.Address)
 			}
 			ok = ok || strings.EqualFold(em.Address, v.Address)
 			if !ok {
@@ -999,6 +1027,10 @@ func imageFilename(imgid int, entrant int, bonus string, isHeic bool) string {
 func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename string) int {
 
 	var photoid int = 0
+
+	if cfg.TestMode {
+		return 0
+	}
 
 	isHeic, _ := regexp.MatchString("(?i)\\.heic", filename)
 	_, err := dbh.Exec("BEGIN TRANSACTION")
