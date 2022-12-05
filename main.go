@@ -6,7 +6,7 @@
  * I am written for readability rather than efficiency, please keep me that way.
  *
  *
- * Copyright (c) 2020 Bob Stammers
+ * Copyright (c) 2022 Bob Stammers
  *
  *
  * This file is part of IBAUK-SCOREMASTER.
@@ -25,6 +25,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -84,6 +85,15 @@ const ResponseStyleLbl = ` text-align: right; padding-right: 1em; `
 
 var dbh *sql.DB
 
+var ReloadConfigFromDB bool
+
+type EmailSettings struct {
+	Port     int    `json:"Port"`
+	Host     string `json:"Host"`
+	Username string `json:"Username"`
+	Password string `json:"Password"`
+}
+
 var cfg struct {
 	ImapServer         string    `yaml:"imapserver"`
 	ImapLogin          string    `yaml:"login"`
@@ -114,15 +124,13 @@ var cfg struct {
 	TrapMails          bool     `yaml:"trapmails"`
 	TrapPath           string   `yaml:"trappath"`
 	TestMode           bool     `yaml:"testmode"`
-	SMTPServer         string   `yaml:"SMTPServer"`
-	SMTPUser           string   `yaml:"SMTPUser"`
-	SMTPPassword       string   `yaml:"SMTPPassword"`
-	TestModeLiteral    string   `yaml:"TestModeLiteral"`
-	TestResponseGood   string   `yaml:"TestResponseGood"`
-	TestResponseBad    string   `yaml:"TestResponseBad"`
-	TestResponseAdvice string   `yaml:"TestResponseAdvice"`
-	TestResponseBCC    string   `yaml:"TestResponseBCC"`
-	MaxExtraPhotos     int      `yaml:"MaxExtraPhotos"`
+	SmtpStuff          EmailSettings
+	TestModeLiteral    string `yaml:"TestModeLiteral"`
+	TestResponseGood   string `yaml:"TestResponseGood"`
+	TestResponseBad    string `yaml:"TestResponseBad"`
+	TestResponseAdvice string `yaml:"TestResponseAdvice"`
+	TestResponseBCC    string `yaml:"TestResponseBCC"`
+	MaxExtraPhotos     int    `yaml:"MaxExtraPhotos"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -312,17 +320,18 @@ func fetchBonus(b string, t string) (string, int) {
 
 }
 
-func fetchConfigFromDB() string {
-	rows, err := dbh.Query("SELECT ebcsettings FROM rallyparams")
+func fetchConfigFromDB() (string, []byte) {
+	rows, err := dbh.Query("SELECT ebcsettings,EmailParams FROM rallyparams")
 	if err != nil {
 		fmt.Printf("%s can't fetch config from database [%v] run aborted\n", logts(), err)
 		osExit(1)
 	}
 	defer rows.Close()
 	rows.Next()
-	var res string
-	rows.Scan(&res)
-	return res
+	var yaml string
+	var json []byte
+	rows.Scan(&yaml, &json)
+	return yaml, json
 
 }
 func fetchNewClaims() {
@@ -658,10 +667,8 @@ func init() {
 
 	if strings.EqualFold(configPath, "") {
 		configPath = "config"
-		ymltext := fetchConfigFromDB()
-		file := strings.NewReader(ymltext)
-		D := yaml.NewDecoder(file)
-		D.Decode(&cfg)
+		refreshConfig()
+		ReloadConfigFromDB = true
 	} else {
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			wd, _ := os.Getwd()
@@ -680,23 +687,34 @@ func init() {
 
 	cfg.Path2DB = *path2db
 
-	if cfg.DontRun {
-		if !*silent {
-			fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
+	/*
+		 * This is now a live switcheable option. I'll continue to run but won't do anything unless
+		 * this option is reset.
+		 *
+		if cfg.DontRun {
+			if !*silent {
+				fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
+			}
+			osExit(0)
 		}
-		osExit(0)
-	}
+	*/
 
 	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
 		fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
 		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
 		osExit(1)
 	}
-	if cfg.ImapPassword == "" {
-		fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
-		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
-		osExit(1)
-	}
+
+	/*
+		 * This is now a live switcheable option. I'll continue to run but won't do anything unless
+		 * this option is reset.
+		 *
+		if cfg.ImapPassword == "" {
+			fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
+			fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+			osExit(1)
+		}
+	*/
 
 	if *trapmails != "" {
 		cfg.TrapPath = *trapmails
@@ -762,13 +780,23 @@ func logts() string {
 
 func main() {
 
-	if !*silent {
-		fmt.Printf("%v: Monitoring %v for %v\n", apptitle, cfg.ImapLogin, cfg.RallyTitle)
-	}
+	monitoring := !cfg.DontRun && cfg.ImapPassword != ""
+
+	showMonitorStatus(monitoring)
 
 	for {
-		fetchNewClaims()
+		if monitoring {
+			fetchNewClaims()
+		}
 		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
+		if ReloadConfigFromDB {
+			refreshConfig()
+			newmon := !cfg.DontRun && cfg.ImapPassword != ""
+			if newmon != monitoring {
+				monitoring = newmon
+				showMonitorStatus(monitoring)
+			}
+		}
 	}
 }
 
@@ -841,26 +869,18 @@ func parseSubject(s string, formal bool) *fourFields {
 	return &f4
 }
 
-/*
-func processSingleMessage(m Email,emailid uint32,msgtime time.Time) {
+func refreshConfig() {
 
-
+	ymltext, jsontext := fetchConfigFromDB()
+	file := strings.NewReader(ymltext)
+	D := yaml.NewDecoder(file)
+	D.Decode(&cfg)
+	json.Unmarshal(jsontext, &cfg.SmtpStuff)
 
 }
 
-*/
-
-/*
-sendTestResponse generates and sends a narrative email to the sender
-of any emails received while cfg.TestMode is true.
-*/
-func yesno(x bool) string {
-	if x {
-		return ` <span style="` + ResponseStyleYes + `">&#x2714;</span>`
-	}
-	return ` <span style="` + ResponseStyleNo + `">&#x2718;</span>`
-}
-
+// sendTestResponse generates and sends a narrative email to the sender
+// of any emails received while cfg.TestMode is true.
 func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 
 	var sb strings.Builder
@@ -919,12 +939,18 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 
 	sb.WriteString("<p>" + apptitle + " v" + appversion + "</p>")
 
+	if cfg.SmtpStuff.Password == "" {
+		fmt.Println("ERROR: Can't send test response, password is empty")
+		return
+	}
 	client := smtp.NewSMTPClient()
-	client.Host = cfg.SMTPServer
-	client.Port = 587
-	client.Username = cfg.SMTPUser
-	client.Password = cfg.SMTPPassword
-	client.Encryption = smtp.EncryptionTLS
+	client.Host = cfg.SmtpStuff.Host
+	client.Port = cfg.SmtpStuff.Port
+	client.Username = cfg.SmtpStuff.Username
+	client.Password = cfg.SmtpStuff.Password
+
+	client.Encryption = smtp.EncryptionTLS // It's 2022, everybody needs TLS now, don't they.
+
 	client.ConnectTimeout = 10 * time.Second
 	client.SendTimeout = 10 * time.Second
 	client.KeepAlive = false
@@ -952,6 +978,16 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	fmt.Printf("%v sending test response to %v\n", logts(), from)
 }
 
+func showMonitorStatus(monitoring bool) {
+	if !*silent {
+		if !monitoring {
+			fmt.Printf("%v: Monitoring suspended\n", apptitle)
+		} else {
+			fmt.Printf("%v: Monitoring %v for %v\n", apptitle, cfg.ImapLogin, cfg.RallyTitle)
+		}
+	}
+
+}
 func storeTimeDB(t time.Time) string {
 
 	res := t.Local().Format(timefmt)
@@ -1090,4 +1126,11 @@ func waitforkey() {
 	fmt.Printf("%v: Press [Enter] to exit ... \n", apptitle)
 	fmt.Scanln()
 
+}
+
+func yesno(x bool) string {
+	if x {
+		return ` <span style="` + ResponseStyleYes + `">&#x2714;</span>`
+	}
+	return ` <span style="` + ResponseStyleNo + `">&#x2718;</span>`
 }
