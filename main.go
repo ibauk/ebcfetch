@@ -1116,7 +1116,7 @@ func validateHeicHandler() {
 	err := cmd.Run()
 	if err != nil {
 		fmt.Printf("%s: HEIC handler %v NOT AVAILABLE (%v)\n", apptitle, cfg.Heic2jpg, err)
-		cfg.ConvertHeic = false
+		cfg.ConvertHeic = true // On Linux, "convert" returns 1 if run with no params
 	}
 
 }
