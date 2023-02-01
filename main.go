@@ -6,7 +6,7 @@
  * I am written for readability rather than efficiency, please keep me that way.
  *
  *
- * Copyright (c) 2022 Bob Stammers
+ * Copyright (c) 2023 Bob Stammers
  *
  *
  * This file is part of IBAUK-SCOREMASTER.
@@ -55,13 +55,12 @@ I extract Electronic Bonus Claims from the designated email account using IMAP
 and load them into the scoring database ready for judging by a human being.
 
 I parse the Subject line for the four fields entrant, bonus, odo and time and 
-load the single photo into the database. If the Subject line doesn't parse 
-correctly, or if either the entrant or bonus codes are not present in the 
-database, or there's more than one photo, I "unsee" the email and don't record 
-it in the database. Such unseen emails must be processed by hand. Look for 
-unread emails in a Gmail window.  Photos are expected to be JPGs but HEICs are 
-also accepted and can be automatically converted to JPG using an external 
-utility.
+load any photos into the database. If the Subject line doesn't parse 
+correctly, or if the entrant can't be identified, I "unsee" the email and 
+don't record it in the database. Such unseen emails must be processed by hand. 
+Look for unread emails in a Gmail window.  Photos are expected to be JPGs but 
+HEICs are also accepted and can be automatically converted to JPG using an 
+external utility.
 
 If using Gmail, 2-factor authentication must be enabled and an 'app password'
 must be created. To do that, edit the Google Account settings, [Security].
@@ -131,6 +130,7 @@ var cfg struct {
 	TestResponseAdvice string `yaml:"TestResponseAdvice"`
 	TestResponseBCC    string `yaml:"TestResponseBCC"`
 	MaxExtraPhotos     int    `yaml:"MaxExtraPhotos"`
+	DebugVerbose	   bool	  `yaml:"verbose"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -141,6 +141,7 @@ type fourFields struct {
 	BonusID    string
 	OdoReading int
 	OdoOk      bool
+	ClaimTime  time.Time
 	HHmm       string
 	TimeOk     bool
 	TimeHH     int
@@ -255,7 +256,7 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	 * I turn this into a fully specified timestamp by reference to other variables
 	 * taken from the email and the rally specification.
 	 *
-	 * The time of day is treated as local time.
+	 * The time of day as expressed in the Subject line is treated as being in the rally's timezone.
 	 *
 	 * If the rally spans a single day, that day is applied. If not then the date is
 	 * derived from the email's Date field unless that field refers to an earlier time
@@ -266,9 +267,12 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	var year, day int
 	var mth time.Month
 	if cfg.RallyStart == cfg.RallyFinish {
-		year, mth, day = cfg.RallyStart.Date()
+		year, mth, day = cfg.RallyStart.Date()	// Timezone is rally timezone
 	} else {
-		year, mth, day = rfc822date.Date()
+		year, mth, day = rfc822date.In(cfg.LocalTZ).Date() 	// The datetime parsed from the Date: field of the email. Timezone is whatever it is.
+	}
+	if cfg.DebugVerbose {
+		fmt.Printf("calcClaimDate called with y=%v m=%v d=%v hh=%v mm=%v\n",year,mth,day,hh,mm)
 	}
 	cd := time.Date(year, mth, day, hh, mm, 0, 0, cfg.LocalTZ)
 	hrs := cd.Sub(rfc822date).Hours()
@@ -423,7 +427,10 @@ func fetchNewClaims() {
 		}
 
 		f4 := parseSubject(m.Subject, false)
-		if !f4.ok && cfg.AllowBody {
+		if m.Subject == "" && cfg.AllowBody {
+			if cfg.DebugVerbose {
+				fmt.Println("Parsing body for Subject:")
+			}
 			f4 = parseSubject(m.TextBody, false)
 			if f4.ok {
 				m.Subject = m.TextBody
@@ -435,8 +442,13 @@ func fetchNewClaims() {
 		TR.EntrantID = f4.EntrantID
 		TR.BonusID = f4.BonusID
 		TR.OdoReading = f4.OdoReading
-		TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
-		TR.HHmm = f4.HHmm
+		if (!f4.ClaimTime.IsZero()) {
+			TR.ClaimDateTime = f4.ClaimTime
+		} else {
+			TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
+			TR.HHmm = f4.HHmm
+			f4.ClaimTime = TR.ClaimDateTime
+		}
 		TR.ExtraField = f4.Extra
 
 		ve := validateEntrant(*f4, m.Header.Get("From"))
@@ -449,7 +461,7 @@ func fetchNewClaims() {
 		TR.BonusIsReal = vb != ""
 		TR.BonusDesc = vb
 
-		if !ve {
+		if !ve && !cfg.TestMode {
 			if !*silent {
 				okx := "ok"
 				if !f4.ok {
@@ -471,7 +483,7 @@ func fetchNewClaims() {
 			}
 		} else {
 
-			TR.ClaimIsGood = f4.ok && ve && vb != ""
+			TR.ClaimIsGood = f4.ok && (ve || !cfg.MatchEmail) && vb != ""
 
 		}
 
@@ -582,7 +594,8 @@ func fetchNewClaims() {
 			_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
 				f4.EntrantID, f4.BonusID, f4.OdoReading,
 				storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
-				storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
+				//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
+				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
 				strictok, photoTime, sentatTime, photoid)
 			if err != nil {
@@ -653,7 +666,7 @@ func init() {
 	}
 
 	if !*silent {
-		fmt.Printf("%v: v%v   Copyright (c) 2022 Bob Stammers\n", apptitle, appversion)
+		fmt.Printf("%v: v%v   Copyright (c) 2023 Bob Stammers\n", apptitle, appversion)
 	}
 
 	if *path2db == "" {
@@ -688,33 +701,28 @@ func init() {
 	cfg.Path2DB = *path2db
 
 	/*
-		 * This is now a live switcheable option. I'll continue to run but won't do anything unless
+		 * These are now live switcheable options. I'll continue to run but won't do anything unless
 		 * this option is reset.
 		 *
+	*/
 		if cfg.DontRun {
 			if !*silent {
 				fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
 			}
-			osExit(0)
 		}
-	*/
-
-	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
-		fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
-		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
-		osExit(1)
-	}
 
 	/*
 		 * This is now a live switcheable option. I'll continue to run but won't do anything unless
 		 * this option is reset.
 		 *
-		if cfg.ImapPassword == "" {
+	*/
+		if cfg.ImapServer == "" || cfg.ImapLogin == "" {
+			fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
+			fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+		} else 	if cfg.ImapPassword == "" {
 			fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
 			fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
-			osExit(1)
 		}
-	*/
 
 	if *trapmails != "" {
 		cfg.TrapPath = *trapmails
@@ -750,9 +758,10 @@ func loadRallyData() bool {
 		fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, LocalTZ)
 		return false
 	}
-	if *verbose {
-		fmt.Printf("cfg.LocalTZ is %v\n", cfg.LocalTZ)
-	}
+
+	// Make the rally timezone our timezone, regardless of what the server is set to
+	time.Local = cfg.LocalTZ
+
 	cfg.RallyStart, err = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
 	if err != nil {
 		fmt.Printf("%s RallyStart %s cannot be parsed\n", apptitle, RallyStart)
@@ -760,7 +769,7 @@ func loadRallyData() bool {
 	}
 	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
 	if *verbose {
-		fmt.Printf("cfg.OffsetTZ is %v\n", cfg.OffsetTZ)
+		fmt.Printf("%s: Rally timezone is %v [%v]\n", apptitle, cfg.LocalTZ,cfg.OffsetTZ)
 	}
 	cfg.RallyFinish, err = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
 	if err != nil {
@@ -778,9 +787,18 @@ func logts() string {
 
 }
 
+// Checks configuration for possibility to monitor emails
+func monitoringOK() bool {
+
+	res := !cfg.DontRun && cfg.ImapPassword != "" && cfg.ImapServer != "" && cfg.ImapLogin != ""
+	return res
+
+}
+
 func main() {
 
-	monitoring := !cfg.DontRun && cfg.ImapPassword != ""
+	monitoring := monitoringOK()
+	testmode := cfg.TestMode
 
 	showMonitorStatus(monitoring)
 
@@ -791,9 +809,10 @@ func main() {
 		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
 		if ReloadConfigFromDB {
 			refreshConfig()
-			newmon := !cfg.DontRun && cfg.ImapPassword != ""
-			if newmon != monitoring {
+			newmon := monitoringOK()
+			if newmon != monitoring || testmode != cfg.TestMode {
 				monitoring = newmon
+				testmode = cfg.TestMode
 				showMonitorStatus(monitoring)
 			}
 		}
@@ -826,9 +845,23 @@ func osExit(res int) {
 	runtime.Goexit()
 
 }
+
+func extractEntrantID(x string) int {
+
+	// Strip any leading non-digits. Trailing non-digits ignored.
+	// This made necessary because some event organisers like to decorate rider numbers, no names, no pack drill.
+	re := regexp.MustCompile(`[^\d]*(\d+)`)
+	en := re.FindStringSubmatch(x)
+	if len(en) > 0 {
+		res,_ := strconv.Atoi(en[1])
+		return res
+	}
+	return 0
+
+}
+
 func parseSubject(s string, formal bool) *fourFields {
 
-	//fmt.Printf("Parsing %v\n", s)
 	var f4 fourFields
 	var ff []string
 
@@ -837,6 +870,9 @@ func parseSubject(s string, formal bool) *fourFields {
 	} else {
 		ff = cfg.SubjectRE.FindStringSubmatch(s)
 	}
+	if ff == nil {
+		fmt.Printf("Matching %v %v returned nil\n",formal,s)
+	}
 	f4.ok = len(ff) > 0
 	if formal && len(ff) < 5 {
 		f4.ok = false
@@ -844,7 +880,7 @@ func parseSubject(s string, formal bool) *fourFields {
 	if !f4.ok {
 		return &f4
 	}
-	f4.EntrantID, _ = strconv.Atoi(ff[1])
+	f4.EntrantID = extractEntrantID(ff[1])
 	f4.BonusID = strings.ToUpper(ff[2])
 	if len(ff) < 5 {
 		return &f4
@@ -853,18 +889,36 @@ func parseSubject(s string, formal bool) *fourFields {
 	OdoRE := regexp.MustCompile(`^\d+$`)
 	f4.OdoOk = OdoRE.MatchString(ff[3])
 
-	hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
 
-	f4.HHmm = hmx
+
+	var err error
+	f4.ClaimTime,err = time.ParseInLocation(time.RFC3339,ff[4],cfg.LocalTZ)
+	if err != nil {
+		hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
+		f4.HHmm = hmx
 	TimeRE := regexp.MustCompile(`^\d\d\d\d$`)
 	hm, _ := strconv.Atoi(hmx)
 	f4.TimeHH = hm / 100
 	f4.TimeMM = hm % 100
 	f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
+	}
 
 	if len(ff) > 5 {
 		f4.Extra = ff[5]
 	}
+
+	
+	if cfg.DebugVerbose {
+		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n",formal,s,len(ff),ff[1],f4.EntrantID,ff[2],f4.BonusID,f4.OdoReading,f4.HHmm,f4.Extra)
+		/*
+		if formal {
+			fmt.Printf("RE is `%v`\n",cfg.StrictRE)
+		} else {
+			fmt.Printf("RE is `%v`\n",cfg.SubjectRE)
+		}
+		*/
+	}
+	
 
 	return &f4
 }
@@ -876,6 +930,9 @@ func refreshConfig() {
 	D := yaml.NewDecoder(file)
 	D.Decode(&cfg)
 	json.Unmarshal(jsontext, &cfg.SmtpStuff)
+	if cfg.DebugVerbose {
+		*verbose = true
+	}
 
 }
 
@@ -983,7 +1040,11 @@ func showMonitorStatus(monitoring bool) {
 		if !monitoring {
 			fmt.Printf("%v: Monitoring suspended\n", apptitle)
 		} else {
-			fmt.Printf("%v: Monitoring %v for %v\n", apptitle, cfg.ImapLogin, cfg.RallyTitle)
+			fmt.Printf("%v: Monitoring %v for %v", apptitle, cfg.ImapLogin, cfg.RallyTitle)
+			if cfg.TestMode {
+				fmt.Print(" [ TEST MODE ]")
+			}
+			fmt.Println()
 		}
 	}
 
@@ -1012,7 +1073,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		if !*silent {
+		if *verbose {
 			fmt.Printf("%v No such entrant %v\n", logts(), f4.EntrantID)
 		}
 		return false
@@ -1115,7 +1176,7 @@ func validateHeicHandler() {
 	cmd := exec.Command(cfg.Heic2jpg)
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf("%s: HEIC handler %v NOT AVAILABLE (%v)\n", apptitle, cfg.Heic2jpg, err)
+		fmt.Printf("%s: HEIC handler %v may not be available (%v)\n", apptitle, cfg.Heic2jpg, err)
 		cfg.ConvertHeic = true // On Linux, "convert" returns 1 if run with no params
 	}
 
