@@ -94,44 +94,45 @@ type EmailSettings struct {
 }
 
 var cfg struct {
-	ImapServer         string    `yaml:"imapserver"`
-	ImapLogin          string    `yaml:"login"`
-	ImapPassword       string    `yaml:"password"`
-	NotBefore          time.Time `yaml:"notbefore,omitempty"`
-	NotAfter           time.Time `yaml:"notafter,omitempty"`
-	Path2DB            string    `yaml:"db"`
-	Subject            string    `yaml:"subject"`
-	Strict             string    `yaml:"strict"`
-	SubjectRE          *regexp.Regexp
-	StrictRE           *regexp.Regexp
-	RallyTitle         string
-	RallyStart         time.Time
-	RallyFinish        time.Time
-	LocalTimezone      string
-	LocalTZ            *time.Location
-	OffsetTZ           string
-	SelectFlags        []string `yaml:"selectflags"`
-	CheckStrict        bool     `yaml:"checkstrict"`
-	SleepSeconds       int      `yaml:"sleepseconds"`
-	Path2SM            string   `yaml:"path2sm"`
-	ImageFolder        string   `yaml:"imagefolder"`
-	MatchEmail         bool     `yaml:"matchemail"`
-	Heic2jpg           string   `yaml:"heic2jpg"`
-	ConvertHeic        bool     `yaml:"convertheic2jpg"`
-	DontRun            bool     `yaml:"dontrun"`
-	KeyWait            bool     `yaml:"debugwait"`
-	AllowBody          bool     `yaml:"allowbody"`
-	TrapMails          bool     `yaml:"trapmails"`
-	TrapPath           string   `yaml:"trappath"`
-	TestMode           bool     `yaml:"testmode"`
-	SmtpStuff          EmailSettings
-	TestModeLiteral    string `yaml:"TestModeLiteral"`
-	TestResponseGood   string `yaml:"TestResponseGood"`
-	TestResponseBad    string `yaml:"TestResponseBad"`
-	TestResponseAdvice string `yaml:"TestResponseAdvice"`
-	TestResponseBCC    string `yaml:"TestResponseBCC"`
-	MaxExtraPhotos     int    `yaml:"MaxExtraPhotos"`
-	DebugVerbose       bool   `yaml:"verbose"`
+	ImapServer           string    `yaml:"imapserver"`
+	ImapLogin            string    `yaml:"login"`
+	ImapPassword         string    `yaml:"password"`
+	NotBefore            time.Time `yaml:"notbefore,omitempty"`
+	NotAfter             time.Time `yaml:"notafter,omitempty"`
+	Path2DB              string    `yaml:"db"`
+	Subject              string    `yaml:"subject"`
+	Strict               string    `yaml:"strict"`
+	SubjectRE            *regexp.Regexp
+	StrictRE             *regexp.Regexp
+	RallyTitle           string
+	RallyStart           time.Time
+	RallyFinish          time.Time
+	LocalTimezone        string
+	LocalTZ              *time.Location
+	OffsetTZ             string
+	SelectFlags          []string `yaml:"selectflags"`
+	CheckStrict          bool     `yaml:"checkstrict"`
+	SleepSeconds         int      `yaml:"sleepseconds"`
+	Path2SM              string   `yaml:"path2sm"`
+	ImageFolder          string   `yaml:"imagefolder"`
+	MatchEmail           bool     `yaml:"matchemail"`
+	Heic2jpg             string   `yaml:"heic2jpg"`
+	ConvertHeic          bool     `yaml:"convertheic2jpg"`
+	DontRun              bool     `yaml:"dontrun"`
+	KeyWait              bool     `yaml:"debugwait"`
+	AllowBody            bool     `yaml:"allowbody"`
+	TrapMails            bool     `yaml:"trapmails"`
+	TrapPath             string   `yaml:"trappath"`
+	TestMode             bool     `yaml:"testmode"`
+	SmtpStuff            EmailSettings
+	TestModeLiteral      string `yaml:"TestModeLiteral"`
+	TestResponseGood     string `yaml:"TestResponseGood"`
+	TestResponseBad      string `yaml:"TestResponseBad"`
+	TestResponseAdvice   string `yaml:"TestResponseAdvice"`
+	TestResponseBCC      string `yaml:"TestResponseBCC"`
+	TestResponseBadEmail string `yaml:"TestResponseBadEmail"`
+	MaxExtraPhotos       int    `yaml:"MaxExtraPhotos"`
+	DebugVerbose         bool   `yaml:"verbose"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -443,11 +444,11 @@ func fetchNewClaims() {
 		TR.EntrantID = f4.EntrantID
 		TR.BonusID = f4.BonusID
 		TR.OdoReading = f4.OdoReading
+		TR.HHmm = f4.HHmm
 		if !f4.ClaimTime.IsZero() {
 			TR.ClaimDateTime = f4.ClaimTime
 		} else {
 			TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
-			TR.HHmm = f4.HHmm
 			f4.ClaimTime = TR.ClaimDateTime
 		}
 		TR.ExtraField = f4.Extra
@@ -872,7 +873,7 @@ func parseSubject(s string, formal bool) *fourFields {
 	} else {
 		ff = cfg.SubjectRE.FindStringSubmatch(s)
 	}
-	if ff == nil {
+	if ff == nil && cfg.DebugVerbose {
 		fmt.Printf("Matching %v %v returned nil\n", formal, s)
 	}
 	f4.ok = len(ff) > 0
@@ -901,6 +902,11 @@ func parseSubject(s string, formal bool) *fourFields {
 		f4.TimeHH = hm / 100
 		f4.TimeMM = hm % 100
 		f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
+	} else {
+		f4.HHmm = ff[4]
+		f4.TimeHH = f4.ClaimTime.Hour()
+		f4.TimeMM = f4.ClaimTime.Minute()
+		f4.TimeOk = true
 	}
 
 	if len(ff) > 5 {
@@ -957,18 +963,11 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	if tr.SubjectFromBody {
 		sb.WriteString(" &#x2611;")
 	}
+	sb.WriteString((" " + yesno(cfg.SubjectRE.MatchString(tr.ClaimSubject))))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email<td>`)
 	sb.WriteString(yesno(tr.AddressIsRegistered))
-	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Photo</td><td>`)
-
-	if tr.PhotoPresent > 1 {
-		sb.WriteString(` x ` + strconv.Itoa(tr.PhotoPresent) + " ")
-	}
-
-	sb.WriteString(yesno(tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto))
-
-	if tr.PhotoPresent > maxphoto {
-		sb.WriteString("  (max = " + strconv.Itoa(maxphoto) + ")")
+	if !tr.AddressIsRegistered {
+		sb.WriteString(" " + cfg.TestResponseBadEmail)
 	}
 
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Bonus</td><td>`)
@@ -983,12 +982,23 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Odo</td><td>`)
 	sb.WriteString(strconv.Itoa(tr.OdoReading) + yesno(f4.OdoOk))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">hhmm '` + tr.HHmm + `'</td><td>`)
-	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate))
-	sb.WriteString(" " + tr.ClaimDateTime.Format(time.RFC3339))
 	sb.WriteString(yesno(f4.TimeOk))
+	sb.WriteString(" " + tr.ClaimDateTime.Format(time.UnixDate))
+	sb.WriteString(" / " + tr.ClaimDateTime.Format(time.RFC3339))
 	if tr.ExtraField != "" {
 		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">&#x270D;</td><td>`)
 		sb.WriteString(tr.ExtraField)
+	}
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Photo</td><td>`)
+
+	if tr.PhotoPresent > 1 {
+		sb.WriteString(` x ` + strconv.Itoa(tr.PhotoPresent) + " ")
+	}
+
+	sb.WriteString(yesno(tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto))
+
+	if tr.PhotoPresent > maxphoto {
+		sb.WriteString("  (max = " + strconv.Itoa(maxphoto) + ")")
 	}
 	sb.WriteString("</td></tr></table>")
 
