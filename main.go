@@ -107,6 +107,7 @@ var cfg struct {
 	RallyTitle         string
 	RallyStart         time.Time
 	RallyFinish        time.Time
+	LocalTimezone      string
 	LocalTZ            *time.Location
 	OffsetTZ           string
 	SelectFlags        []string `yaml:"selectflags"`
@@ -130,7 +131,7 @@ var cfg struct {
 	TestResponseAdvice string `yaml:"TestResponseAdvice"`
 	TestResponseBCC    string `yaml:"TestResponseBCC"`
 	MaxExtraPhotos     int    `yaml:"MaxExtraPhotos"`
-	DebugVerbose	   bool	  `yaml:"verbose"`
+	DebugVerbose       bool   `yaml:"verbose"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -267,12 +268,12 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	var year, day int
 	var mth time.Month
 	if cfg.RallyStart == cfg.RallyFinish {
-		year, mth, day = cfg.RallyStart.Date()	// Timezone is rally timezone
+		year, mth, day = cfg.RallyStart.Date() // Timezone is rally timezone
 	} else {
-		year, mth, day = rfc822date.In(cfg.LocalTZ).Date() 	// The datetime parsed from the Date: field of the email. Timezone is whatever it is.
+		year, mth, day = rfc822date.In(cfg.LocalTZ).Date() // The datetime parsed from the Date: field of the email. Timezone is whatever it is.
 	}
 	if cfg.DebugVerbose {
-		fmt.Printf("calcClaimDate called with y=%v m=%v d=%v hh=%v mm=%v\n",year,mth,day,hh,mm)
+		fmt.Printf("calcClaimDate called with y=%v m=%v d=%v hh=%v mm=%v\n", year, mth, day, hh, mm)
 	}
 	cd := time.Date(year, mth, day, hh, mm, 0, 0, cfg.LocalTZ)
 	hrs := cd.Sub(rfc822date).Hours()
@@ -442,7 +443,7 @@ func fetchNewClaims() {
 		TR.EntrantID = f4.EntrantID
 		TR.BonusID = f4.BonusID
 		TR.OdoReading = f4.OdoReading
-		if (!f4.ClaimTime.IsZero()) {
+		if !f4.ClaimTime.IsZero() {
 			TR.ClaimDateTime = f4.ClaimTime
 		} else {
 			TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
@@ -701,28 +702,28 @@ func init() {
 	cfg.Path2DB = *path2db
 
 	/*
-		 * These are now live switcheable options. I'll continue to run but won't do anything unless
-		 * this option is reset.
-		 *
-	*/
-		if cfg.DontRun {
-			if !*silent {
-				fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
-			}
+	 * These are now live switcheable options. I'll continue to run but won't do anything unless
+	 * this option is reset.
+	 *
+	 */
+	if cfg.DontRun {
+		if !*silent {
+			fmt.Printf("%s: DontRun option triggered, enough already\n", apptitle)
 		}
+	}
 
 	/*
-		 * This is now a live switcheable option. I'll continue to run but won't do anything unless
-		 * this option is reset.
-		 *
-	*/
-		if cfg.ImapServer == "" || cfg.ImapLogin == "" {
-			fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
-			fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
-		} else 	if cfg.ImapPassword == "" {
-			fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
-			fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
-		}
+	 * This is now a live switcheable option. I'll continue to run but won't do anything unless
+	 * this option is reset.
+	 *
+	 */
+	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
+		fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
+		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+	} else if cfg.ImapPassword == "" {
+		fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
+		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+	}
 
 	if *trapmails != "" {
 		cfg.TrapPath = *trapmails
@@ -753,6 +754,7 @@ func loadRallyData() bool {
 	var RallyStart, RallyFinish, LocalTZ string
 	rows.Scan(&cfg.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
 
+	cfg.LocalTimezone = LocalTZ
 	cfg.LocalTZ, err = time.LoadLocation(LocalTZ)
 	if err != nil {
 		fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, LocalTZ)
@@ -769,7 +771,7 @@ func loadRallyData() bool {
 	}
 	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
 	if *verbose {
-		fmt.Printf("%s: Rally timezone is %v [%v]\n", apptitle, cfg.LocalTZ,cfg.OffsetTZ)
+		fmt.Printf("%s: Rally timezone is %v [%v]\n", apptitle, cfg.LocalTZ, cfg.OffsetTZ)
 	}
 	cfg.RallyFinish, err = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
 	if err != nil {
@@ -853,7 +855,7 @@ func extractEntrantID(x string) int {
 	re := regexp.MustCompile(`[^\d]*(\d+)`)
 	en := re.FindStringSubmatch(x)
 	if len(en) > 0 {
-		res,_ := strconv.Atoi(en[1])
+		res, _ := strconv.Atoi(en[1])
 		return res
 	}
 	return 0
@@ -871,7 +873,7 @@ func parseSubject(s string, formal bool) *fourFields {
 		ff = cfg.SubjectRE.FindStringSubmatch(s)
 	}
 	if ff == nil {
-		fmt.Printf("Matching %v %v returned nil\n",formal,s)
+		fmt.Printf("Matching %v %v returned nil\n", formal, s)
 	}
 	f4.ok = len(ff) > 0
 	if formal && len(ff) < 5 {
@@ -889,36 +891,32 @@ func parseSubject(s string, formal bool) *fourFields {
 	OdoRE := regexp.MustCompile(`^\d+$`)
 	f4.OdoOk = OdoRE.MatchString(ff[3])
 
-
-
 	var err error
-	f4.ClaimTime,err = time.ParseInLocation(time.RFC3339,ff[4],cfg.LocalTZ)
+	f4.ClaimTime, err = time.ParseInLocation(time.RFC3339, ff[4], cfg.LocalTZ)
 	if err != nil {
 		hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
 		f4.HHmm = hmx
-	TimeRE := regexp.MustCompile(`^\d\d\d\d$`)
-	hm, _ := strconv.Atoi(hmx)
-	f4.TimeHH = hm / 100
-	f4.TimeMM = hm % 100
-	f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
+		TimeRE := regexp.MustCompile(`^\d\d\d\d$`)
+		hm, _ := strconv.Atoi(hmx)
+		f4.TimeHH = hm / 100
+		f4.TimeMM = hm % 100
+		f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
 	}
 
 	if len(ff) > 5 {
 		f4.Extra = ff[5]
 	}
 
-	
 	if cfg.DebugVerbose {
-		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n",formal,s,len(ff),ff[1],f4.EntrantID,ff[2],f4.BonusID,f4.OdoReading,f4.HHmm,f4.Extra)
+		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n", formal, s, len(ff), ff[1], f4.EntrantID, ff[2], f4.BonusID, f4.OdoReading, f4.HHmm, f4.Extra)
 		/*
-		if formal {
-			fmt.Printf("RE is `%v`\n",cfg.StrictRE)
-		} else {
-			fmt.Printf("RE is `%v`\n",cfg.SubjectRE)
-		}
+			if formal {
+				fmt.Printf("RE is `%v`\n",cfg.StrictRE)
+			} else {
+				fmt.Printf("RE is `%v`\n",cfg.SubjectRE)
+			}
 		*/
 	}
-	
 
 	return &f4
 }
@@ -949,7 +947,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	} else {
 		sb.WriteString("<p>" + cfg.TestResponseBad)
 	}
-	sb.WriteString((" [ " + cfg.RallyTitle + " " + cfg.TestModeLiteral + " ]</p>"))
+	sb.WriteString(" [ " + cfg.RallyTitle + " ")
+	sb.WriteString("(TZ=" + cfg.LocalTimezone + " " + cfg.OffsetTZ + ") ")
+	sb.WriteString(cfg.TestModeLiteral + " ]</p>")
 
 	sb.WriteString("<table>")
 	sb.WriteString(`<tr><td style="` + ResponseStyleLbl + `">Subject</td><td>`)
@@ -957,7 +957,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	if tr.SubjectFromBody {
 		sb.WriteString(" &#x2611;")
 	}
-	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant<td>`)
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email<td>`)
 	sb.WriteString(yesno(tr.AddressIsRegistered))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Photo</td><td>`)
 
@@ -968,7 +968,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	sb.WriteString(yesno(tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto))
 
 	if tr.PhotoPresent > maxphoto {
-		sb.WriteString("  max=" + strconv.Itoa(maxphoto))
+		sb.WriteString("  (max = " + strconv.Itoa(maxphoto) + ")")
 	}
 
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Bonus</td><td>`)
@@ -983,7 +983,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Odo</td><td>`)
 	sb.WriteString(strconv.Itoa(tr.OdoReading) + yesno(f4.OdoOk))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">hhmm '` + tr.HHmm + `'</td><td>`)
-	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate) + yesno(f4.TimeOk))
+	sb.WriteString(tr.ClaimDateTime.Format(time.UnixDate))
+	sb.WriteString(" " + tr.ClaimDateTime.Format(time.RFC3339))
+	sb.WriteString(yesno(f4.TimeOk))
 	if tr.ExtraField != "" {
 		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">&#x270D;</td><td>`)
 		sb.WriteString(tr.ExtraField)
@@ -994,7 +996,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>" + apptitle + " v" + appversion + "</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + "]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")
@@ -1024,9 +1026,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	}
 	msg.SetFrom(cfg.ImapLogin)
 	if tr.ClaimIsGood && tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto {
-		msg.SetSubject(apptitle + ": " + cfg.TestResponseGood)
+		msg.SetSubject("EBC test: " + cfg.TestResponseGood)
 	} else {
-		msg.SetSubject(apptitle + ": " + cfg.TestResponseBad)
+		msg.SetSubject("EBC test: " + cfg.TestResponseBad)
 	}
 
 	msg.SetBody(smtp.TextHTML, sb.String())
