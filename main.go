@@ -485,7 +485,7 @@ func fetchNewClaims() {
 			}
 		} else {
 
-			TR.ClaimIsGood = f4.ok && (ve || !cfg.MatchEmail) && vb != ""
+			TR.ClaimIsGood = f4.ok && (ve || !cfg.MatchEmail) && vb != "" && f4.TimeOk
 
 		}
 
@@ -896,17 +896,25 @@ func parseSubject(s string, formal bool) *fourFields {
 	f4.ClaimTime, err = time.ParseInLocation(time.RFC3339, ff[4], cfg.LocalTZ)
 	if err != nil {
 		hmx := strings.ReplaceAll(strings.ReplaceAll(ff[4], ":", ""), ".", "")
+		if len(hmx) < 4 {
+			hmx = "0" + hmx
+		}
 		f4.HHmm = hmx
 		TimeRE := regexp.MustCompile(`^\d\d\d\d$`)
 		hm, _ := strconv.Atoi(hmx)
 		f4.TimeHH = hm / 100
 		f4.TimeMM = hm % 100
 		f4.TimeOk = TimeRE.MatchString(hmx) && f4.TimeHH < 24 && f4.TimeMM < 60
+		//fmt.Printf("TimeOk - %v == %v\n", hmx, f4.TimeOk)
 	} else {
 		f4.HHmm = ff[4]
 		f4.TimeHH = f4.ClaimTime.Hour()
 		f4.TimeMM = f4.ClaimTime.Minute()
 		f4.TimeOk = true
+	}
+
+	if !f4.TimeOk {
+		f4.ok = false
 	}
 
 	if len(ff) > 5 {
@@ -963,7 +971,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	if tr.SubjectFromBody {
 		sb.WriteString(" &#x2611;")
 	}
-	sb.WriteString((" " + yesno(cfg.SubjectRE.MatchString(tr.ClaimSubject))))
+	sb.WriteString((" " + yesno(cfg.SubjectRE.MatchString(tr.ClaimSubject) && f4.TimeOk)))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email<td>`)
 	sb.WriteString(yesno(tr.AddressIsRegistered))
 	if !tr.AddressIsRegistered {
@@ -1006,7 +1014,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + "]</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " .]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")

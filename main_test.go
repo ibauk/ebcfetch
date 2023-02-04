@@ -20,10 +20,11 @@ var subjects = []SUBJECT{
 	{"a01 bac 12345 3.17", true, false},
 	{"A1 BB1 123.456 0440", false, false},
 	{"1A BB1 123456 0440", true, false},
+	{"1A BB1 123456 20099", false, false},
 	{"01 13 2345 1712 bollox and stuff", true, true},
-	{"Fwd: 1 23b 27 1234",true,false},
-	{"Fwd: 1 23b 27 1234 some old bollox",true,false},
-	{"Fwd: 1 23b 27 2023-02-01T07:15:00+03:00 some old bollox",true,false},
+	{"Fwd: 1 23b 27 1234", true, false},
+	{"Fwd: 1 23b 27 1234 some old bollox", true, false},
+	{"Fwd: 1 23b 27 2023-02-01T07:15:00+03:00 some old bollox", true, false},
 }
 
 var _ = func() bool {
