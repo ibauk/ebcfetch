@@ -1014,7 +1014,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " .]</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " ..]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")
