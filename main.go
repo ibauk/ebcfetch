@@ -160,6 +160,7 @@ type testResponse struct {
 	SubjectFromBody     bool
 	PhotoPresent        int
 	EntrantID           int
+	ValidEntrantID      bool
 	BonusID             string
 	BonusIsReal         bool
 	BonusDesc           string
@@ -453,8 +454,9 @@ func fetchNewClaims() {
 		}
 		TR.ExtraField = f4.Extra
 
-		ve := validateEntrant(*f4, m.Header.Get("From"))
-		TR.AddressIsRegistered = ve
+		ve, vea := validateEntrant(*f4, m.Header.Get("From"))
+		TR.ValidEntrantID = ve
+		TR.AddressIsRegistered = vea
 
 		// If ve is false then I don't know who the entrant is so I must not create a claim in ScoreMaster
 		// In TestMode we do want to process the email and respond even though ve is false
@@ -485,7 +487,7 @@ func fetchNewClaims() {
 			}
 		} else {
 
-			TR.ClaimIsGood = f4.ok && (ve || !cfg.MatchEmail) && vb != "" && f4.TimeOk
+			TR.ClaimIsGood = f4.ok && ve && (vea || !cfg.MatchEmail) && vb != "" && f4.TimeOk
 
 		}
 
@@ -972,6 +974,8 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString(" &#x2611;")
 	}
 	sb.WriteString((" " + yesno(cfg.SubjectRE.MatchString(tr.ClaimSubject) && f4.TimeOk)))
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">EntrantID ok<td>`)
+	sb.WriteString(yesno(tr.ValidEntrantID))
 	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email<td>`)
 	sb.WriteString(yesno(tr.AddressIsRegistered))
 	if !tr.AddressIsRegistered {
@@ -1014,7 +1018,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " ..]</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " ...]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")
@@ -1084,19 +1088,19 @@ func validateBonus(f4 fourFields) string {
 
 }
 
-func validateEntrant(f4 fourFields, from string) bool {
+func validateEntrant(f4 fourFields, from string) (bool, bool) {
 
 	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
 		fmt.Printf("%v Entrant! %v %v\n", logts(), f4.EntrantID, err)
-		return false
+		return false, false
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if *verbose {
 			fmt.Printf("%v No such entrant %v\n", logts(), f4.EntrantID)
 		}
-		return false
+		return false, false
 	}
 
 	var RiderName, Email string
@@ -1129,7 +1133,7 @@ func validateEntrant(f4 fourFields, from string) bool {
 			fmt.Printf("%v received from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
 		}
 	}
-	return ok && !strings.EqualFold(RiderName, "")
+	return true, ok && !strings.EqualFold(RiderName, "")
 }
 
 func imageFilename(imgid int, entrant int, bonus string, isHeic bool) string {
