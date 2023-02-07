@@ -974,10 +974,10 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString(" &#x2611;")
 	}
 	sb.WriteString((" " + yesno(cfg.SubjectRE.MatchString(tr.ClaimSubject) && f4.TimeOk)))
-	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">EntrantID ok<td>`)
+	sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Entrant#</td><td>` + strconv.Itoa(f4.EntrantID))
 	sb.WriteString(yesno(tr.ValidEntrantID))
 	if tr.ValidEntrantID {
-		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email<td>`)
+		sb.WriteString(`</td></tr><tr><td style="` + ResponseStyleLbl + `">Email = Entrant Email</td><td>`)
 		sb.WriteString(yesno(tr.AddressIsRegistered))
 		if !tr.AddressIsRegistered {
 			sb.WriteString(" " + cfg.TestResponseBadEmail)
@@ -1020,7 +1020,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " .....]</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " :]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")
