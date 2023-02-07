@@ -455,7 +455,7 @@ func fetchNewClaims() {
 		TR.ExtraField = f4.Extra
 
 		ve, vea := validateEntrant(*f4, m.Header.Get("From"))
-		TR.ValidEntrantID = ve
+		TR.ValidEntrantID = ve && f4.EntrantID > 0
 		TR.AddressIsRegistered = vea
 
 		// If ve is false then I don't know who the entrant is so I must not create a claim in ScoreMaster
@@ -1020,7 +1020,7 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString("<p>" + cfg.TestResponseAdvice + "</p>")
 	}
 
-	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " ....]</p>")
+	sb.WriteString("<p>ScoreMaster [" + apptitle + " v" + appversion + " .....]</p>")
 
 	if cfg.SmtpStuff.Password == "" {
 		fmt.Println("ERROR: Can't send test response, password is empty")
