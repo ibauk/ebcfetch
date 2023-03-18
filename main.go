@@ -75,7 +75,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7"
+const appversion = "1.7.1"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -99,7 +99,6 @@ var cfg struct {
 	ImapPassword         string    `yaml:"password"`
 	NotBefore            time.Time `yaml:"notbefore,omitempty"`
 	NotAfter             time.Time `yaml:"notafter,omitempty"`
-	Path2DB              string    `yaml:"db"`
 	Subject              string    `yaml:"subject"`
 	Strict               string    `yaml:"strict"`
 	SubjectRE            *regexp.Regexp
@@ -700,9 +699,8 @@ func init() {
 			D := yaml.NewDecoder(file)
 			D.Decode(&cfg)
 		}
+		cfg.Path2SM = filepath.Dir(*path2db)
 	}
-
-	cfg.Path2DB = *path2db
 
 	/*
 	 * These are now live switcheable options. I'll continue to run but won't do anything unless
@@ -947,6 +945,7 @@ func refreshConfig() {
 	if cfg.DebugVerbose {
 		*verbose = true
 	}
+	cfg.Path2SM = filepath.Dir(*path2db)
 
 }
 
