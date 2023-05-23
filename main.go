@@ -75,7 +75,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.1"
+const appversion = "1.7.2"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -94,44 +94,46 @@ type EmailSettings struct {
 }
 
 var cfg struct {
-	ImapServer           string    `yaml:"imapserver"`
-	ImapLogin            string    `yaml:"login"`
-	ImapPassword         string    `yaml:"password"`
-	NotBefore            time.Time `yaml:"notbefore,omitempty"`
-	NotAfter             time.Time `yaml:"notafter,omitempty"`
-	Subject              string    `yaml:"subject"`
-	Strict               string    `yaml:"strict"`
-	SubjectRE            *regexp.Regexp
-	StrictRE             *regexp.Regexp
-	RallyTitle           string
-	RallyStart           time.Time
-	RallyFinish          time.Time
-	LocalTimezone        string
-	LocalTZ              *time.Location
-	OffsetTZ             string
-	SelectFlags          []string `yaml:"selectflags"`
-	CheckStrict          bool     `yaml:"checkstrict"`
-	SleepSeconds         int      `yaml:"sleepseconds"`
-	Path2SM              string   `yaml:"path2sm"`
-	ImageFolder          string   `yaml:"imagefolder"`
-	MatchEmail           bool     `yaml:"matchemail"`
-	Heic2jpg             string   `yaml:"heic2jpg"`
-	ConvertHeic          bool     `yaml:"convertheic2jpg"`
-	DontRun              bool     `yaml:"dontrun"`
-	KeyWait              bool     `yaml:"debugwait"`
-	AllowBody            bool     `yaml:"allowbody"`
-	TrapMails            bool     `yaml:"trapmails"`
-	TrapPath             string   `yaml:"trappath"`
-	TestMode             bool     `yaml:"testmode"`
-	SmtpStuff            EmailSettings
-	TestModeLiteral      string `yaml:"TestModeLiteral"`
-	TestResponseGood     string `yaml:"TestResponseGood"`
-	TestResponseBad      string `yaml:"TestResponseBad"`
-	TestResponseAdvice   string `yaml:"TestResponseAdvice"`
-	TestResponseBCC      string `yaml:"TestResponseBCC"`
-	TestResponseBadEmail string `yaml:"TestResponseBadEmail"`
-	MaxExtraPhotos       int    `yaml:"MaxExtraPhotos"`
-	DebugVerbose         bool   `yaml:"verbose"`
+	ImapServer            string    `yaml:"imapserver"`
+	ImapLogin             string    `yaml:"login"`
+	ImapPassword          string    `yaml:"password"`
+	NotBefore             time.Time `yaml:"notbefore,omitempty"`
+	NotAfter              time.Time `yaml:"notafter,omitempty"`
+	Subject               string    `yaml:"subject"`
+	Strict                string    `yaml:"strict"`
+	SubjectRE             *regexp.Regexp
+	StrictRE              *regexp.Regexp
+	RallyTitle            string
+	RallyStart            time.Time
+	RallyFinish           time.Time
+	LocalTimezone         string
+	LocalTZ               *time.Location
+	OffsetTZ              string
+	SelectFlags           []string `yaml:"selectflags"`
+	CheckStrict           bool     `yaml:"checkstrict"`
+	SleepSeconds          int      `yaml:"sleepseconds"`
+	Path2SM               string   `yaml:"path2sm"`
+	ImageFolder           string   `yaml:"imagefolder"`
+	MatchEmail            bool     `yaml:"matchemail"`
+	Heic2jpg              string   `yaml:"heic2jpg"`
+	ConvertHeic           bool     `yaml:"convertheic2jpg"`
+	DontRun               bool     `yaml:"dontrun"`
+	KeyWait               bool     `yaml:"debugwait"`
+	AllowBody             bool     `yaml:"allowbody"`
+	TrapMails             bool     `yaml:"trapmails"`
+	TrapPath              string   `yaml:"trappath"`
+	TestMode              bool     `yaml:"testmode"`
+	SmtpStuff             EmailSettings
+	TestModeLiteral       string `yaml:"TestModeLiteral"`
+	TestResponseSubject   string `yaml:"TestResponseSubject"`
+	TestResponseGood      string `yaml:"TestResponseGood"`
+	TestResponseBad       string `yaml:"TestResponseBad"`
+	TestResponseAdvice    string `yaml:"TestResponseAdvice"`
+	TestResponseBCC       string `yaml:"TestResponseBCC"`
+	TestResponseBadEmail  string `yaml:"TestResponseBadEmail"`
+	TestResponseGoodEmail string `yaml:"TestResponseGoodEmail"`
+	MaxExtraPhotos        int    `yaml:"MaxExtraPhotos"`
+	DebugVerbose          bool   `yaml:"verbose"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -464,7 +466,7 @@ func fetchNewClaims() {
 		TR.BonusIsReal = vb != ""
 		TR.BonusDesc = vb
 
-		if !ve && !cfg.TestMode {
+		if !vea && !cfg.TestMode {
 			if !*silent {
 				okx := "ok"
 				if !f4.ok {
@@ -980,6 +982,8 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		sb.WriteString(yesno(tr.AddressIsRegistered))
 		if !tr.AddressIsRegistered {
 			sb.WriteString(" " + cfg.TestResponseBadEmail)
+		} else {
+			sb.WriteString(" " + cfg.TestResponseGoodEmail)
 		}
 	}
 
@@ -1048,7 +1052,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 		msg.AddBcc(cfg.TestResponseBCC)
 	}
 	msg.SetFrom(cfg.ImapLogin)
-	if tr.ClaimIsGood && tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto {
+	if cfg.TestResponseSubject != "" {
+		msg.SetSubject(cfg.TestResponseSubject)
+	} else if tr.ClaimIsGood && tr.PhotoPresent > 0 && tr.PhotoPresent <= maxphoto {
 		msg.SetSubject("EBC test: " + cfg.TestResponseGood)
 	} else {
 		msg.SetSubject("EBC test: " + cfg.TestResponseBad)
@@ -1091,6 +1097,11 @@ func validateBonus(f4 fourFields) string {
 
 func validateEntrant(f4 fourFields, from string) (bool, bool) {
 
+	var allE []string
+	if cfg.TestMode && !cfg.MatchEmail {
+		allE = listValidTestAddresses()
+	}
+
 	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
 	if err != nil {
 		fmt.Printf("%v Entrant! %v %v\n", logts(), f4.EntrantID, err)
@@ -1109,20 +1120,37 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 	v, _ := mail.ParseAddress(from)      // where the email is sent from
 	e, _ := mail.ParseAddressList(Email) // addresses known for this entrant
 	ok := !cfg.MatchEmail
+
+	// Email matching options
+	//
+	// In a live rally, MatchEmail=true means from must match entrant's address,
+	//                  MatchEmail=false means don't care
+	//
+	// In Test mode, MatchEmail=true means return ok if from must match entrant's address,
+	//               MatchEmail=false means return ok if from matches any address in database
+
 	if !ok || cfg.TestMode {
 		if cfg.TestMode {
 			ok = false
 		}
-		for _, em := range e {
-			if *verbose {
-				fmt.Printf("%v comparing %v with %v\n", logts(), v.Address, em.Address)
+		var myE []string
+		if cfg.TestMode && !cfg.MatchEmail {
+			myE = allE
+		} else {
+			for _, em := range e {
+				myE = append(myE, em.Address)
 			}
-			ok = ok || strings.EqualFold(em.Address, v.Address)
+		}
+		for _, em := range myE {
+			if *verbose {
+				fmt.Printf("%v comparing %v with %v\n", logts(), v.Address, em)
+			}
+			ok = ok || strings.EqualFold(em, v.Address)
 			if !ok {
 				f := func(c rune) bool {
 					return c == '@'
 				}
-				a1 := strings.FieldsFunc(em.Address, f)
+				a1 := strings.FieldsFunc(em, f)
 				a2 := strings.FieldsFunc(v.Address, f)
 				ok = strings.EqualFold(a1[0], a2[0]) // Compare only the 'account' port of the address
 				if ok && !*silent {
@@ -1135,6 +1163,27 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 		}
 	}
 	return true, ok && !strings.EqualFold(RiderName, "")
+}
+
+// returns an array of email addresses for all entrants
+func listValidTestAddresses() []string {
+
+	sqlx := "SELECT Email FROM entrants"
+	rows, err := dbh.Query(sqlx)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+	var res []string
+	var email string
+	for rows.Next() {
+		rows.Scan(&email)
+		if email != "" {
+			res = append(res, email)
+		}
+	}
+	return res
+
 }
 
 func imageFilename(imgid int, entrant int, bonus string, isHeic bool) string {
