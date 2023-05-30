@@ -1,0 +1,21 @@
+# ebcfetch.Service
+#
+# EBCFetch systemd service descriptor for Debian/Ubuntu Linux servers
+#
+# Amend the ExecStart line as you see fit then install this file
+# in /etc/systemd/system and issue 'systemctl daemon-reload' and
+# 'systemctl enable ebcfetch.service' commands
+#
+
+
+[Unit]
+Description=ScoreMaster EBCFetch server
+After=network.target
+
+[Service]
+Type=simple
+Restart=on-success
+ExecStart=/home/bob/ebcfetch/ebcfetch -db /var/www/html/sm/ScoreMaster.db
+
+[Install]
+WantedBy=multi-user.target
