@@ -1035,6 +1035,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	client.Username = cfg.SmtpStuff.Username
 	client.Password = cfg.SmtpStuff.Password
 
+	// Accept any old mail server, this is testing only after all
+	client.TLSConfig.InsecureSkipVerify = true
+
 	client.Encryption = smtp.EncryptionTLS // It's 2022, everybody needs TLS now, don't they.
 
 	client.ConnectTimeout = 10 * time.Second
