@@ -24,6 +24,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -91,6 +92,7 @@ type EmailSettings struct {
 	Host     string `json:"Host"`
 	Username string `json:"Username"`
 	Password string `json:"Password"`
+	CertName string `json:"CertName"`
 }
 
 var cfg struct {
@@ -1035,14 +1037,15 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 	client.Username = cfg.SmtpStuff.Username
 	client.Password = cfg.SmtpStuff.Password
 
-	// Accept any old mail server, this is testing only after all
-	client.TLSConfig.InsecureSkipVerify = true
-
 	client.Encryption = smtp.EncryptionTLS // It's 2022, everybody needs TLS now, don't they.
 
 	client.ConnectTimeout = 10 * time.Second
 	client.SendTimeout = 10 * time.Second
 	client.KeepAlive = false
+
+	if cfg.SmtpStuff.CertName != "" {
+		client.TLSConfig = &tls.Config{ServerName: cfg.SmtpStuff.CertName}
+	}
 
 	conn, err := client.Connect()
 	if err != nil {
