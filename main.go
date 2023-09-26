@@ -76,7 +76,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.2"
+const appversion = "1.7.3"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -311,6 +311,38 @@ func calcOffsetString(t time.Time) string {
 
 }
 
+// extractDateOfResentClaim
+//
+// I examine the existing claims in the database to see whether the current claim is a simple
+// retransmit of an earlier claim rather than a new claim.
+// If this is a retransmit, I return the same datetime as the original claim otherwise
+// I return false and let the normal processes proceed.
+//
+
+func extractDateOfResentClaim(EntrantID int, BonusID string, OdoReading int, TimeHH int, TimeMM int) (time.Time, bool) {
+
+	var res time.Time
+	var ok bool
+
+	sqlx := "SELECT ClaimTime FROM ebclaims WHERE "
+	sqlx += fmt.Sprintf("EntrantID=%v AND BonusID='%v' AND OdoReading=%v AND ClaimHH=%v AND ClaimMM=%v", EntrantID, BonusID, OdoReading, TimeHH, TimeMM)
+	sqlx += " ORDER BY ClaimTime,DateTime"
+	rows, err := dbh.Query(sqlx)
+	if err != nil {
+		fmt.Println(sqlx)
+		panic(err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		ct := ""
+		rows.Scan(&ct)
+		res, err = time.ParseInLocation(time.RFC3339, ct, cfg.LocalTZ)
+		ok = err == nil
+	}
+	return res, ok
+
+}
+
 func fetchBonus(b string, t string) (string, int) {
 
 	rows, err := dbh.Query("SELECT BriefDesc,Points FROM "+t+" WHERE BonusID=?", b)
@@ -452,7 +484,11 @@ func fetchNewClaims() {
 		if !f4.ClaimTime.IsZero() {
 			TR.ClaimDateTime = f4.ClaimTime
 		} else {
-			TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
+			ok := false
+			TR.ClaimDateTime, ok = extractDateOfResentClaim(f4.EntrantID, f4.BonusID, f4.OdoReading, f4.TimeHH, f4.TimeMM)
+			if !ok {
+				TR.ClaimDateTime = calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)
+			}
 			f4.ClaimTime = TR.ClaimDateTime
 		}
 		TR.ExtraField = f4.Extra
@@ -914,7 +950,7 @@ func parseSubject(s string, formal bool) *fourFields {
 		f4.HHmm = ff[4]
 		f4.TimeHH = f4.ClaimTime.Hour()
 		f4.TimeMM = f4.ClaimTime.Minute()
-		f4.TimeOk = true
+		f4.TimeOk = f4.TimeHH < 24 && f4.TimeMM < 60
 	}
 
 	if !f4.TimeOk {
