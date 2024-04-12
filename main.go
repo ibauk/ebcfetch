@@ -6,7 +6,7 @@
  * I am written for readability rather than efficiency, please keep me that way.
  *
  *
- * Copyright (c) 2023 Bob Stammers
+ * Copyright (c) 2024 Bob Stammers
  *
  *
  * This file is part of IBAUK-SCOREMASTER.
@@ -76,7 +76,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.3"
+const appversion = "1.7.4"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
