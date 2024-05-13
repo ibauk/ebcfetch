@@ -51,6 +51,8 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
+const copyrite = "Copyright (c) 2024 Bob Stammers"
+
 const progdesc = `
 I extract Electronic Bonus Claims from the designated email account using IMAP
 and load them into the scoring database ready for judging by a human being.
@@ -76,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.4"
+const appversion = "1.7.5"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -709,7 +711,7 @@ func init() {
 	}
 
 	if !*silent {
-		fmt.Printf("%v: v%v   Copyright (c) 2023 Bob Stammers\n", apptitle, appversion)
+		fmt.Printf("%v: v%v   %v\n", apptitle, appversion, copyrite)
 	}
 
 	if *path2db == "" {
@@ -1187,6 +1189,7 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 			if *verbose {
 				fmt.Printf("%v comparing %v with %v\n", logts(), v.Address, em)
 			}
+			ok = ok || strings.EqualFold(em, cfg.ImapLogin) // Anything sent from my email address is ok by definition
 			ok = ok || strings.EqualFold(em, v.Address)
 			if !ok {
 				f := func(c rune) bool {
