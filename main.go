@@ -1183,6 +1183,12 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 	var RiderName, Email string
 	var TeamID int
 	rows.Scan(&RiderName, &Email, &TeamID)
+	for rows.Next() {
+		var rn, em string
+		var tn int
+		rows.Scan(&rn, &em, &tn)
+		Email += "," + em
+	}
 	v, _ := mail.ParseAddress(from)      // where the email is sent from
 	e, _ := mail.ParseAddressList(Email) // addresses known for this entrant
 	ok := !cfg.MatchEmail
