@@ -78,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.5"
+const appversion = "1.7.6"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -1139,6 +1139,22 @@ func validateBonus(f4 fourFields) string {
 
 }
 
+func fetchTeamID(eid int) int {
+
+	rows, err := dbh.Query("SELECT TeamID FROM entrants WHERE EntrantID=?", eid)
+	if err != nil {
+		fmt.Printf("%v can't fetch TeamID\n", logts())
+		return 0
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0
+	}
+	var res int
+	rows.Scan(&res)
+	return res
+}
+
 func validateEntrant(f4 fourFields, from string) (bool, bool) {
 
 	var allE []string
@@ -1146,7 +1162,12 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 		allE = listValidTestAddresses()
 	}
 
-	rows, err := dbh.Query("SELECT RiderName,Email FROM entrants WHERE EntrantID=?", f4.EntrantID)
+	sqlx := "SELECT RiderName,Email,TeamID FROM entrants WHERE EntrantID=" + strconv.Itoa(f4.EntrantID)
+	team := fetchTeamID(f4.EntrantID)
+	if team > 0 {
+		sqlx += " OR TeamID=" + strconv.Itoa(team)
+	}
+	rows, err := dbh.Query(sqlx)
 	if err != nil {
 		fmt.Printf("%v Entrant! %v %v\n", logts(), f4.EntrantID, err)
 		return false, false
@@ -1160,7 +1181,8 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 	}
 
 	var RiderName, Email string
-	rows.Scan(&RiderName, &Email)
+	var TeamID int
+	rows.Scan(&RiderName, &Email, &TeamID)
 	v, _ := mail.ParseAddress(from)      // where the email is sent from
 	e, _ := mail.ParseAddressList(Email) // addresses known for this entrant
 	ok := !cfg.MatchEmail
@@ -1189,7 +1211,7 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 			if *verbose {
 				fmt.Printf("%v comparing %v with %v\n", logts(), v.Address, em)
 			}
-			ok = ok || strings.EqualFold(em, cfg.ImapLogin) // Anything sent from my email address is ok by definition
+			ok = ok || strings.EqualFold(v.Address, cfg.ImapLogin) // Anything sent from my email address is ok by definition
 			ok = ok || strings.EqualFold(em, v.Address)
 			if !ok {
 				f := func(c rune) bool {
