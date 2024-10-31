@@ -78,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.7.6"
+const appversion = "1.8"
 const timefmt = time.RFC3339
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
@@ -532,12 +532,18 @@ func fetchNewClaims() {
 
 		}
 
-		var strictok bool = true
-		if cfg.CheckStrict || cfg.TestMode {
-			f5 := parseSubject(m.Subject, true)
-			strictok = f5.ok
-		}
-		TR.ClaimIsPerfect = TR.ClaimIsGood && strictok
+		/*
+			 *
+			 * No longer care about 'strict', only allowable
+			 *
+			var strictok bool = true
+			if cfg.CheckStrict || cfg.TestMode {
+				f5 := parseSubject(m.Subject, true)
+				strictok = f5.ok
+			}
+			TR.ClaimIsPerfect = TR.ClaimIsGood && strictok
+			*
+		*/
 
 		var photoid int = 0
 		var photoTime time.Time
@@ -642,7 +648,7 @@ func fetchNewClaims() {
 				//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
 				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
-				strictok, photoTime, sentatTime, photoid)
+				false, photoTime, sentatTime, photoid)
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s can't store claim - %v\n", logts(), err)
@@ -988,6 +994,48 @@ func refreshConfig() {
 		*verbose = true
 	}
 	cfg.Path2SM = filepath.Dir(*path2db)
+
+}
+
+func sendAlertToBob(whatsup string) {
+
+	var sendToAddress = []string{"stammers.bob@gmail.com", "webmaster@ironbutt.co.uk"}
+	const alertSubject = "EBCFetch alert"
+
+	//fmt.Printf("WhatsUp: %v\n", whatsup)
+	client := smtp.NewSMTPClient()
+	client.Host = cfg.SmtpStuff.Host
+	client.Port = cfg.SmtpStuff.Port
+	client.Username = cfg.SmtpStuff.Username
+	client.Password = cfg.SmtpStuff.Password
+
+	//fmt.Printf("U:%v P:%v\n", client.Username, client.Password)
+	client.Encryption = smtp.EncryptionTLS // It's 2022, everybody needs TLS now, don't they.
+
+	client.ConnectTimeout = 10 * time.Second
+	client.SendTimeout = 10 * time.Second
+	client.KeepAlive = false
+
+	if cfg.SmtpStuff.CertName != "" {
+		client.TLSConfig = &tls.Config{ServerName: cfg.SmtpStuff.CertName}
+	}
+
+	conn, err := client.Connect()
+	if err != nil {
+		fmt.Printf("Can't connect to %v because %v\n", client.Host, err)
+		return
+	}
+	msg := smtp.NewMSG()
+	for _, k := range sendToAddress {
+		msg.AddTo(k)
+	}
+	msg.SetFrom(cfg.ImapLogin)
+	msg.SetSubject(alertSubject)
+
+	msg.SetBody(smtp.TextPlain, whatsup)
+
+	msg.Send(conn)
+	fmt.Printf("%v sending alert to %v\n", logts(), sendToAddress)
 
 }
 

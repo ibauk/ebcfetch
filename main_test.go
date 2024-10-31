@@ -5,26 +5,25 @@ import (
 )
 
 type SUBJECT struct {
-	x      string
-	ok     bool
-	strict bool
+	x  string
+	ok bool
 }
 
 var subjects = []SUBJECT{
-	{"1 2 3 1234", true, true},
-	{"01 bb 12345 930", true, false},
-	{"01 02", false, false},
-	{"bob 02 1234 1234", false, false},
-	{"bob bob 1234 12:34", false, false},
-	{"1 Ba,1234,12:34", false, false},
-	{"a01 bac 12345 3.17", true, false},
-	{"A1 BB1 123.456 0440", false, false},
-	{"1A BB1 123456 0440", false, false},
-	{"1A BB1 123456 20099", false, false},
-	{"01 13 2345 1712 bollox and stuff", true, true},
-	{"Fwd: 1 23b 27 1234", true, false},
-	{"Fwd: 1 23b 27 1234 some old bollox", true, false},
-	{"Fwd: 1 23b 27 2023-02-01T07:15:00+03:00 some old bollox", true, false},
+	{"1 2 3 1234", true},
+	{"01 bb 12345 930", true},
+	{"01 02", false},
+	{"bob 02 1234 1234", true},
+	{"bob bob 1234 12:34", true},
+	{"1 Ba,1234,12:34", false},
+	{"a01 bac 12345 3.17", true},
+	{"A1 BB1 123.456 0440", false},
+	{"1A BB1 123456 0440", true},
+	{"1A BB1 123456 20099", false},
+	{"01 13 2345 1712 bollox and stuff", true},
+	{"Fwd: 1 23b 27 1234", true},
+	{"Fwd: 1 23b 27 1234 some old bollox", true},
+	{"Fwd: 1 23b 27 2023-02-01T07:15:00+03:00 some old bollox", true},
 }
 
 var _ = func() bool {
@@ -32,6 +31,10 @@ var _ = func() bool {
 	return true
 }()
 
+/*
+ *
+ * No longer care about 'strict', only allowable
+ *
 func TestStrictSubject(t *testing.T) {
 	for _, x := range subjects {
 		ff := *parseSubject(x.x, true)
@@ -40,6 +43,7 @@ func TestStrictSubject(t *testing.T) {
 		}
 	}
 }
+*/
 
 func TestAllowableSubject(t *testing.T) {
 	for _, x := range subjects {

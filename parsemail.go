@@ -8,6 +8,8 @@ package main
  * Include ContentDisposition header for attachments/embedded files
  * Caters for clear-signed Apple attachments 2022-06-07
  *
+ * Upgraded to handle inline JPEGs as per Arjen Steiner BBR24
+ *
  */
 
 import (
@@ -29,6 +31,8 @@ const contentTypeMultipartSigned = "multipart/signed"
 const contentTypeTextHtml = "text/html"
 const contentTypeTextPlain = "text/plain"
 const contentTypeApplicationPKCS = "application/pkcs7-signature"
+const contentTypeOctetStream = "application/octet-stream"
+const contentTypeImageJpeg = "image/jpeg"
 
 // Parse an email message read from io.Reader into parsemail.Email struct
 func Parse(r io.Reader) (email Email, err error) {
@@ -63,8 +67,15 @@ func Parse(r io.Reader) (email Email, err error) {
 	case contentTypeTextHtml:
 		message, _ := io.ReadAll(msg.Body)
 		email.HTMLBody = strings.TrimSuffix(string(message[:]), "\n")
+	case contentTypeOctetStream:
+		email.Attachments, err = parseAttachmentOnlyEmail(msg.Body, msg.Header)
+	case contentTypeImageJpeg:
+		email.Attachments, err = parseInlineOnlyEmail(msg.Body, msg.Header)
 	default:
 		email.Content, err = decodeContent(msg.Body, msg.Header.Get("Content-Transfer-Encoding"))
+
+		sendAlertToBob(fmt.Sprintf("EBCFetch: ParseMail defaulting - ContentType is %v  \r\n\r\n  From: %v  \r\n\r\n  Subject: %v\n\n", contentType, email.From, email.Subject))
+
 	}
 
 	return
@@ -107,6 +118,31 @@ func createEmailFromHeader(header mail.Header) (email Email, err error) {
 	return
 }
 
+func parseAttachmentOnlyEmail(body io.Reader, header mail.Header) (attachments []Attachment, err error) {
+	contentDisposition := header.Get("Content-Disposition")
+
+	if len(contentDisposition) > 0 && strings.Contains(contentDisposition, "attachment;") {
+
+		attachmentData, err := decodeContent(body, header.Get("Content-Transfer-Encoding"))
+		if err != nil {
+			return attachments, err
+		}
+
+		fileName := strings.Replace(contentDisposition, "attachment; filename=\"", "", -1)
+		fileName = strings.TrimRight(fileName, "\"")
+
+		at := Attachment{
+			Filename:    fileName,
+			ContentType: "application/octet-stream",
+			Data:        attachmentData,
+		}
+
+		attachments = append(attachments, at)
+	}
+
+	return attachments, nil
+}
+
 func parseContentType(contentTypeHeader string) (contentType string, params map[string]string, err error) {
 	if contentTypeHeader == "" {
 		contentType = contentTypeTextPlain
@@ -114,6 +150,31 @@ func parseContentType(contentTypeHeader string) (contentType string, params map[
 	}
 
 	return mime.ParseMediaType(contentTypeHeader)
+}
+
+func parseInlineOnlyEmail(body io.Reader, header mail.Header) (attachments []Attachment, err error) {
+	contentDisposition := header.Get("Content-Disposition")
+
+	if len(contentDisposition) > 0 && strings.Contains(contentDisposition, "inline;") {
+
+		attachmentData, err := decodeContent(body, header.Get("Content-Transfer-Encoding"))
+		if err != nil {
+			return attachments, err
+		}
+
+		fileName := strings.Replace(contentDisposition, "inline; filename=\"", "", -1)
+		fileName = strings.TrimRight(fileName, "\"")
+
+		at := Attachment{
+			Filename:    fileName,
+			ContentType: "image/jpeg",
+			Data:        attachmentData,
+		}
+
+		attachments = append(attachments, at)
+	}
+
+	return attachments, nil
 }
 
 func parseMultipartRelated(msg io.Reader, boundary string) (textBody, htmlBody string, embeddedFiles []EmbeddedFile, err error) {
@@ -189,7 +250,6 @@ func parseMultipartSigned(msg io.Reader, boundary string) (textBody, htmlBody st
 			return textBody, htmlBody, attachments, embeddedFiles, err
 		}
 
-		//fmt.Printf("contentType is %v\n", contentType)
 		switch contentType {
 		case contentTypeTextPlain:
 
