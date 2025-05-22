@@ -6,7 +6,7 @@
  * I am written for readability rather than efficiency, please keep me that way.
  *
  *
- * Copyright (c) 2024 Bob Stammers
+ * Copyright (c) 2025 Bob Stammers
  *
  *
  * This file is part of IBAUK-SCOREMASTER.
@@ -51,7 +51,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
-const copyrite = "Copyright (c) 2024 Bob Stammers"
+const copyrite = "Copyright (c) 2025 Bob Stammers"
 
 const progdesc = `
 I extract Electronic Bonus Claims from the designated email account using IMAP
@@ -78,8 +78,11 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.8"
+const appversion = "1.9"
 const timefmt = time.RFC3339
+
+// I'll pass files without this extension to ebcimg for conversion
+const standardimageextension = ".jpg"
 
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
 const ResponseStyleNo = ` font-size: x-large; color: red; `
@@ -546,6 +549,7 @@ func fetchNewClaims() {
 		*/
 
 		var photoid int = 0
+		var photoids string
 		var photoTime time.Time
 		var numphotos int = 0
 		var photosok bool = true
@@ -571,6 +575,10 @@ func fetchNewClaims() {
 					photosok = false
 					break
 				}
+				if photoids != "" {
+					photoids += ","
+				}
+				photoids += strconv.Itoa(photoid)
 				if *verbose {
 					fmt.Printf("%s attachment of size %v bytes\n", logts(), len(pix))
 				}
@@ -599,6 +607,11 @@ func fetchNewClaims() {
 					photosok = false
 					break
 				}
+				if photoids != "" {
+					photoids += ","
+				}
+				photoids += strconv.Itoa(photoid)
+
 				if *verbose {
 					fmt.Printf("%s embedded image of size %v bytes\n", logts(), len(pix))
 				}
@@ -648,7 +661,7 @@ func fetchNewClaims() {
 				//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
 				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
-				false, photoTime, sentatTime, photoid)
+				false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s can't store claim - %v\n", logts(), err)
@@ -1307,12 +1320,8 @@ func listValidTestAddresses() []string {
 
 }
 
-func imageFilename(imgid int, entrant int, bonus string, isHeic bool) string {
+func imageFilename(imgid int, entrant int, bonus string, ext string) string {
 
-	var ext string = ".jpg"
-	if isHeic {
-		ext = ".HEIC"
-	}
 	return "img" + "-" + strconv.Itoa(entrant) + "-" + bonus + "-" + strconv.Itoa(imgid) + ext
 
 }
@@ -1324,7 +1333,13 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 		return 0
 	}
 
-	isHeic, _ := regexp.MatchString("(?i)\\.heic", filename)
+	fname := strings.ReplaceAll(filename, `"`, ``)
+
+	ext := filepath.Ext(fname)
+
+	isStd, _ := regexp.MatchString("\\"+standardimageextension, fname)
+	isHeic := !isStd
+
 	_, err := dbh.Exec("BEGIN TRANSACTION")
 	if err != nil {
 		if *verbose {
@@ -1339,16 +1354,20 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 	row := dbh.QueryRow("SELECT last_insert_rowid()")
 	row.Scan(&photoid)
 
-	x := filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
+	x := filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, ext))
 	err = os.WriteFile(x, pic, 0644)
 	if err != nil {
 		fmt.Printf("%v can't write image %v - error:%v\n", logts(), x, err)
 		dbh.Exec("ROLLBACK")
 		return 0
 	}
-	y := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, isHeic))
+	y := filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, ext))
+
 	if cfg.ConvertHeic && isHeic {
-		y = filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
+		y = filepath.Join(cfg.Path2SM, cfg.ImageFolder, imageFilename(photoid, entrant, bonus, standardimageextension))
+		if *verbose {
+			fmt.Printf(" Converting: %v %v %v\n", cfg.Heic2jpg, x, y)
+		}
 		cmd := exec.Command(cfg.Heic2jpg, x, y)
 		err := cmd.Run()
 		if err != nil {
@@ -1356,7 +1375,7 @@ func writeImage(entrant int, bonus string, emailid uint32, pic []byte, filename 
 			dbh.Exec("ROLLBACK")
 			return 0
 		}
-		y = filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, false))
+		y = filepath.Join(cfg.ImageFolder, imageFilename(photoid, entrant, bonus, standardimageextension))
 
 	}
 	sqlx = "UPDATE ebcphotos SET image=? WHERE rowid=?"
