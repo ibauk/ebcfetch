@@ -141,6 +141,7 @@ var cfg struct {
 	TestResponseGoodEmail string `yaml:"TestResponseGoodEmail"`
 	MaxExtraPhotos        int    `yaml:"MaxExtraPhotos"`
 	DebugVerbose          bool   `yaml:"verbose"`
+	MaxFetch              int    `yaml:"MaxFetch"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -428,7 +429,16 @@ func fetchNewClaims() {
 
 	// Collect the unique IDs of messages found
 	seqset := new(imap.SeqSet)
-	seqset.AddNum(uids...)
+
+	if cfg.MaxFetch < 1 || len(uids) <= cfg.MaxFetch { // Unlimited fetch
+		seqset.AddNum(uids...)
+	} else {
+		for i := 0; i < cfg.MaxFetch; i++ {
+			seqset.AddNum(uids[i])
+		}
+	}
+
+	//seqset.AddNum(uids...)
 	if seqset.Empty() { // Didn't find any messages so we're done
 		return
 	}
@@ -1016,6 +1026,9 @@ func refreshConfig() {
 		*verbose = true
 	}
 	cfg.Path2SM = filepath.Dir(*path2db)
+	if *verbose {
+		fmt.Printf("MaxFetch=%v\n", cfg.MaxFetch)
+	}
 
 }
 
