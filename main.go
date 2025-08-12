@@ -78,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.9"
+const appversion = "1.9b"
 const timefmt = time.RFC3339
 
 // I'll pass files without this extension to ebcimg for conversion
@@ -450,7 +450,15 @@ func fetchNewClaims() {
 	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
 	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
+	var currentUid uint32
+
 	for msg := range messages {
+
+		currentUid = msg.Uid
+
+		if *verbose {
+			fmt.Printf("Considering msg %v\n", currentUid)
+		}
 
 		var TR testResponse
 
@@ -679,9 +687,10 @@ func fetchNewClaims() {
 
 	if err := <-done; err != nil {
 		if !*silent {
-			fmt.Printf("%s OMG!! %v\n", logts(), err)
+			fmt.Printf("%s OMG!! msg=%v %v\n", logts(), currentUid, err)
 		}
-		return
+		skipped.AddNum(currentUid)
+		//return
 	}
 
 	if !dealtwith.Empty() && !cfg.TestMode {
@@ -1174,9 +1183,9 @@ func sendTestResponse(tr testResponse, from string, f4 *fourFields) {
 func showMonitorStatus(monitoring bool) {
 	if !*silent {
 		if !monitoring {
-			fmt.Printf("%v: Monitoring suspended\n", apptitle)
+			fmt.Printf("%v %v: Monitoring suspended\n", apptitle, appversion)
 		} else {
-			fmt.Printf("%v: Monitoring %v for %v", apptitle, cfg.ImapLogin, cfg.RallyTitle)
+			fmt.Printf("%v %v: Monitoring %v for %v", apptitle, appversion, cfg.ImapLogin, cfg.RallyTitle)
 			if cfg.TestMode {
 				fmt.Print(" [ TEST MODE ]")
 			}
