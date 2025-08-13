@@ -469,6 +469,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
 	var currentUid uint32
+	var LastGoodUid uint32
 
 	N := 0
 
@@ -691,6 +692,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
 				false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
+			LastGoodUid = msg.Uid
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s can't store claim - %v\n", logts(), err)
@@ -710,7 +712,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if !*silent {
 			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
-		skipped.AddNum(currentUid)
+		skipped.AddNum(LastGoodUid + 1)
 		//return
 	}
 
