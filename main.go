@@ -280,6 +280,9 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	var mth time.Month
 	if cfg.RallyStart == cfg.RallyFinish {
 		year, mth, day = cfg.RallyStart.Date() // Timezone is rally timezone
+		if cfg.DebugVerbose {
+			fmt.Printf("%v == %v \n", cfg.RallyStart, cfg.RallyFinish)
+		}
 	} else {
 		year, mth, day = rfc822date.In(cfg.LocalTZ).Date() // The datetime parsed from the Date: field of the email. Timezone is whatever it is.
 	}
@@ -450,13 +453,18 @@ func fetchNewClaims() {
 	// Get the whole message body, automatically sets //Seen
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchUid, imap.FetchInternalDate}
-
+	if *verbose {
+		fmt.Printf(" %s %v item(s) fetched\n", logts(), len(items))
+	}
 	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
+	if *verbose {
+		fmt.Printf("%s starting loop\n", logts())
+	}
 	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
 	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
@@ -690,7 +698,7 @@ func fetchNewClaims() {
 			}
 		}
 		if !*silent {
-			fmt.Printf("%s claiming [ %v ]\n", logts(), m.Subject)
+			fmt.Printf("%s claiming #%v [ %v ]\n", logts(), msg.Uid, m.Subject)
 		}
 
 	} // End msg loop
@@ -1027,7 +1035,7 @@ func refreshConfig() {
 	}
 	cfg.Path2SM = filepath.Dir(*path2db)
 	if *verbose {
-		fmt.Printf("MaxFetch=%v\n", cfg.MaxFetch)
+		fmt.Printf("%s refreshConfig: MaxFetch=%v\n", logts(), cfg.MaxFetch)
 	}
 
 }
