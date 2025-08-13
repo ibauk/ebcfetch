@@ -435,11 +435,15 @@ func fetchNewClaims() {
 	// Collect the unique IDs of messages found
 	seqset := new(imap.SeqSet)
 
+	Nmax := 0
+
 	if cfg.MaxFetch < 1 || len(uids) <= cfg.MaxFetch { // Unlimited fetch
 		seqset.AddNum(uids...)
+		Nmax = len(uids)
 	} else {
 		for i := 0; i < cfg.MaxFetch; i++ {
 			seqset.AddNum(uids[i])
+			Nmax++
 		}
 	}
 
@@ -449,7 +453,7 @@ func fetchNewClaims() {
 	}
 
 	if *verbose {
-		fmt.Printf("%s fetching %v message(s)\n%v\n", logts(), len(uids), uids)
+		fmt.Printf("%s fetching %v message(s)\n", logts(), len(uids))
 	}
 
 	// Get the whole message body, automatically sets //Seen
@@ -466,15 +470,15 @@ func fetchNewClaims() {
 
 	var currentUid uint32
 
-	if *verbose {
-		fmt.Printf("%s processing %v message(s)\n", logts(), len(messages))
-	}
+	N := 0
+
 	for msg := range messages {
 
 		currentUid = msg.Uid
 
+		N++
 		if *verbose {
-			fmt.Printf("Considering msg %v\n", currentUid)
+			fmt.Printf("Considering msg #%v=%v\n", N, currentUid)
 		}
 
 		var TR testResponse
@@ -704,7 +708,7 @@ func fetchNewClaims() {
 
 	if err := <-done; err != nil {
 		if !*silent {
-			fmt.Printf("%s OMG!! msg=%v %v\n", logts(), currentUid, err)
+			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
 		skipped.AddNum(currentUid)
 		//return
