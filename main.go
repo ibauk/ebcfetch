@@ -387,13 +387,13 @@ func fetchConfigFromDB() (string, []byte) {
 	return yaml, json
 
 }
-func fetchNewClaims() {
+func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 
 	// Connect to server
 	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
 		log.Printf("DialTLS: %v\n", err)
-		return
+		return nil, nil
 	}
 
 	// Don't forget to logout
@@ -402,14 +402,14 @@ func fetchNewClaims() {
 	// Login
 	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
 		log.Printf("Login: %v\n", err)
-		return
+		return nil, nil
 	}
 
 	// Select INBOX
 	_, err = c.Select("INBOX", false)
 	if err != nil {
 		log.Printf("Select: %v\n", err)
-		return
+		return nil, nil
 	}
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = cfg.SelectFlags
@@ -449,7 +449,7 @@ func fetchNewClaims() {
 
 	//seqset.AddNum(uids...)
 	if seqset.Empty() { // Didn't find any messages so we're done
-		return
+		return nil, nil
 	}
 
 	if *verbose {
@@ -714,6 +714,9 @@ func fetchNewClaims() {
 		//return
 	}
 
+	return dealtwith, skipped
+	/***
+
 	if !dealtwith.Empty() && !cfg.TestMode {
 		item := imap.FormatFlagsOp(imap.SetFlags, true)
 		flags := []interface{}{imap.FlaggedFlag}
@@ -737,6 +740,53 @@ func fetchNewClaims() {
 			log.Println(err)
 			return
 		}
+	}
+		**/
+
+}
+
+func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
+
+	// Connect to server
+	c, err := client.DialTLS(cfg.ImapServer, nil)
+	if err != nil {
+		log.Printf("DialTLS: %v\n", err)
+		return
+	}
+
+	// Don't forget to logout
+	defer c.Logout()
+
+	// Login
+	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
+		log.Printf("Login: %v\n", err)
+		return
+	}
+
+	// Select INBOX
+	_, err = c.Select("INBOX", false)
+	if err != nil {
+		log.Printf("Select: %v\n", err)
+		return
+	}
+
+	item := imap.FormatFlagsOp(imap.SetFlags, true)
+	flags := []interface{}{}
+	if ignoreThem {
+		flags = []interface{}{imap.FlaggedFlag}
+	}
+	if *verbose {
+		msg := "releasing for retry"
+		if ignoreThem {
+			msg = "leaving unread"
+		}
+
+		fmt.Printf("%s %s %v %v %v\n", logts(), msg, ss, item, flags)
+	}
+	err = c.UidStore(ss, item, flags, nil)
+	if err != nil {
+		log.Println(err)
+		return
 	}
 
 }
@@ -898,7 +948,13 @@ func main() {
 
 	for {
 		if monitoring {
-			fetchNewClaims()
+			dflags, sflags := fetchNewClaims()
+			if dflags != nil && !dflags.Empty() && !cfg.TestMode {
+				flagSkippedEmails(dflags, true)
+			}
+			if sflags != nil && !sflags.Empty() && !cfg.TestMode {
+				flagSkippedEmails(sflags, false)
+			}
 		}
 		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
 		if ReloadConfigFromDB {
