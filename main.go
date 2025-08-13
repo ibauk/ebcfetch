@@ -712,7 +712,9 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if !*silent {
 			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
-		skipped.AddNum(LastGoodUid + 1)
+		for i := uint32(0); i < 3; i++ {
+			skipped.AddNum(currentUid + i)
+		}
 		//return
 	}
 
