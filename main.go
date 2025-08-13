@@ -92,6 +92,9 @@ var dbh *sql.DB
 
 var ReloadConfigFromDB bool
 
+var currentUid uint32 // Used to keep track of email fetch recovery
+var LastGoodUid uint32
+
 type EmailSettings struct {
 	Port     int    `json:"Port"`
 	Host     string `json:"Host"`
@@ -142,6 +145,7 @@ var cfg struct {
 	MaxExtraPhotos        int    `yaml:"MaxExtraPhotos"`
 	DebugVerbose          bool   `yaml:"verbose"`
 	MaxFetch              int    `yaml:"MaxFetch"`
+	MaxBacktrack          int    `yaml:"MaxBacktrack"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -468,9 +472,6 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
 	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
-	var currentUid uint32
-	//var LastGoodUid uint32
-
 	N := 0
 
 	for msg := range messages {
@@ -692,7 +693,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
 				false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
-			//LastGoodUid = msg.Uid
+			LastGoodUid = msg.Uid
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s can't store claim - %v\n", logts(), err)
@@ -712,8 +713,10 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if !*silent {
 			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
-		for i := uint32(0); i < 3; i++ {
-			skipped.AddNum(currentUid + i)
+		for i := uint32(0); i < uint32(cfg.MaxBacktrack); i++ {
+			if currentUid+i > LastGoodUid {
+				skipped.AddNum(currentUid + i)
+			}
 		}
 		//return
 	}
