@@ -276,9 +276,11 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	 *
 	 */
 
+	const ymdOnly = "2006-01-02"
+
 	var year, day int
 	var mth time.Month
-	if cfg.RallyStart == cfg.RallyFinish {
+	if cfg.RallyStart.Format(ymdOnly) == cfg.RallyFinish.Format(ymdOnly) {
 		year, mth, day = cfg.RallyStart.Date() // Timezone is rally timezone
 		if cfg.DebugVerbose {
 			fmt.Printf("%v == %v \n", cfg.RallyStart, cfg.RallyFinish)
@@ -286,9 +288,9 @@ func calcClaimDate(hh, mm int, rfc822date time.Time) time.Time {
 	} else {
 		year, mth, day = rfc822date.In(cfg.LocalTZ).Date() // The datetime parsed from the Date: field of the email. Timezone is whatever it is.
 	}
-	if cfg.DebugVerbose {
-		fmt.Printf("calcClaimDate called with y=%v m=%v d=%v hh=%v mm=%v\n", year, mth, day, hh, mm)
-	}
+	//	if cfg.DebugVerbose {
+	//		fmt.Printf("calcClaimDate called with y=%v m=%v d=%v hh=%v mm=%v\n", year, mth, day, hh, mm)
+	//	}
 	cd := time.Date(year, mth, day, hh, mm, 0, 0, cfg.LocalTZ)
 	hrs := cd.Sub(rfc822date).Hours()
 	if hrs > 1 && cd.Day() != cfg.RallyStart.Day() { // Claimed time is more than one hour later than the send (Date:) time of the email
@@ -447,29 +449,26 @@ func fetchNewClaims() {
 	}
 
 	if *verbose {
-		fmt.Printf("%s fetching %v message(s)\n", logts(), len(uids))
+		fmt.Printf("%s fetching %v message(s)\n%v\n", logts(), len(uids), uids)
 	}
 
 	// Get the whole message body, automatically sets //Seen
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchUid, imap.FetchInternalDate}
-	if *verbose {
-		fmt.Printf(" %s %v item(s) fetched\n", logts(), len(items))
-	}
 	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
-	if *verbose {
-		fmt.Printf("%s starting loop\n", logts())
-	}
 	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
 	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
 
 	var currentUid uint32
 
+	if *verbose {
+		fmt.Printf("%s processing %v message(s)\n", logts(), len(messages))
+	}
 	for msg := range messages {
 
 		currentUid = msg.Uid
@@ -487,7 +486,7 @@ func fetchNewClaims() {
 		}
 		m, err := Parse(r)
 		if err != nil {
-			log.Println(err)
+			log.Printf("Parse error: %v\n", err)
 			continue
 		}
 
@@ -1009,16 +1008,9 @@ func parseSubject(s string, formal bool) *fourFields {
 		f4.Extra = ff[5]
 	}
 
-	if cfg.DebugVerbose {
-		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n", formal, s, len(ff), ff[1], f4.EntrantID, ff[2], f4.BonusID, f4.OdoReading, f4.HHmm, f4.Extra)
-		/*
-			if formal {
-				fmt.Printf("RE is `%v`\n",cfg.StrictRE)
-			} else {
-				fmt.Printf("RE is `%v`\n",cfg.SubjectRE)
-			}
-		*/
-	}
+	//	if cfg.DebugVerbose {
+	//		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n", formal, s, len(ff), ff[1], f4.EntrantID, ff[2], f4.BonusID, f4.OdoReading, f4.HHmm, f4.Extra)
+	//	}
 
 	return &f4
 }
