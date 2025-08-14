@@ -78,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.9b"
+const appversion = "1.9c"
 const timefmt = time.RFC3339
 
 // I'll pass files without this extension to ebcimg for conversion
@@ -704,7 +704,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 			}
 		}
 		if !*silent {
-			fmt.Printf("%s claiming #%v [ %v ]\n", logts(), msg.Uid, m.Subject)
+			fmt.Printf("Claiming #%v [ %v ]\n", msg.Uid, m.Subject)
 		}
 
 	} // End msg loop
@@ -1092,9 +1092,12 @@ func refreshConfig() {
 	if cfg.DebugVerbose {
 		*verbose = true
 	}
+	if cfg.MaxBacktrack < 1 {
+		cfg.MaxBacktrack = 3 // Sensible default
+	}
 	cfg.Path2SM = filepath.Dir(*path2db)
 	if *verbose {
-		fmt.Printf("%s refreshConfig: MaxFetch=%v\n", logts(), cfg.MaxFetch)
+		fmt.Printf("%s refreshConfig: MaxFetch=%v, MaxBacktrack=%v\n", logts(), cfg.MaxFetch, cfg.MaxBacktrack)
 	}
 
 }
