@@ -457,8 +457,13 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	}
 
 	if *verbose {
-		fmt.Printf("%s fetching %v message(s)\n", logts(), len(uids))
+		fmt.Printf("%s fetching %v message(s)\n", logts(), Nmax)
 	}
+
+	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
+	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
+
+	N := 0
 
 	// Get the whole message body, automatically sets //Seen
 	section := &imap.BodySectionName{}
@@ -468,11 +473,6 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	go func() {
 		done <- c.Fetch(seqset, items, messages)
 	}()
-
-	skipped := new(imap.SeqSet)   // Will contain UIDs of claims to be revisited. Possibly couldn't get DB lock
-	dealtwith := new(imap.SeqSet) // Will contain UIDs of non-claims
-
-	N := 0
 
 	for msg := range messages {
 
@@ -757,7 +757,7 @@ func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
 	// Connect to server
 	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
-		log.Printf("DialTLS: %v\n", err)
+		log.Printf("fse:DialTLS: %v\n", err)
 		return
 	}
 
@@ -766,14 +766,14 @@ func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
 
 	// Login
 	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
-		log.Printf("Login: %v\n", err)
+		log.Printf("fse:Login: %v\n", err)
 		return
 	}
 
 	// Select INBOX
 	_, err = c.Select("INBOX", false)
 	if err != nil {
-		log.Printf("Select: %v\n", err)
+		log.Printf("fse:Select: %v\n", err)
 		return
 	}
 
