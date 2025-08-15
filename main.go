@@ -78,7 +78,7 @@ var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
 
 const apptitle = "EBCFetch"
-const appversion = "1.9c"
+const appversion = "1.10"
 const timefmt = time.RFC3339
 
 // I'll pass files without this extension to ebcimg for conversion
@@ -512,6 +512,9 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 			}
 		}
 
+		if *verbose {
+			fmt.Printf("%s %v [ %v ]\n", logts(), currentUid, m.Subject)
+		}
 		TR.ClaimSubject = m.Subject
 		TR.EntrantID = f4.EntrantID
 		TR.BonusID = f4.BonusID
@@ -533,12 +536,19 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		TR.ValidEntrantID = ve && f4.EntrantID > 0
 		TR.AddressIsRegistered = vea
 
+		if *verbose {
+			fmt.Printf("%s ve=%v, vea=%v, Entrant=%v\n", logts(), ve, vea, f4.EntrantID)
+		}
 		// If ve is false then I don't know who the entrant is so I must not create a claim in ScoreMaster
 		// In TestMode we do want to process the email and respond even though ve is false
 
 		vb := validateBonus(*f4)
 		TR.BonusIsReal = vb != ""
 		TR.BonusDesc = vb
+
+		if *verbose {
+			fmt.Printf("%s bonus is %v : %v\n", logts(), TR.BonusIsReal, TR.BonusDesc)
+		}
 
 		if !vea && !cfg.TestMode {
 			if !*silent {
@@ -565,19 +575,6 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 			TR.ClaimIsGood = f4.ok && ve && (vea || !cfg.MatchEmail) && vb != "" && f4.TimeOk
 
 		}
-
-		/*
-			 *
-			 * No longer care about 'strict', only allowable
-			 *
-			var strictok bool = true
-			if cfg.CheckStrict || cfg.TestMode {
-				f5 := parseSubject(m.Subject, true)
-				strictok = f5.ok
-			}
-			TR.ClaimIsPerfect = TR.ClaimIsGood && strictok
-			*
-		*/
 
 		var photoid int = 0
 		var photoids string
@@ -693,15 +690,15 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 				storeTimeDB(f4.ClaimTime),
 				m.Subject, f4.Extra,
 				false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
-			LastGoodUid = msg.Uid
 			if err != nil {
 				if !*silent {
 					fmt.Printf("%s can't store claim - %v\n", logts(), err)
 				}
 				skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
 				continue
-
 			}
+			LastGoodUid = msg.Uid
+
 		}
 		if !*silent {
 			fmt.Printf("Claiming #%v [ %v ]\n", msg.Uid, m.Subject)
@@ -722,33 +719,6 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	}
 
 	return dealtwith, skipped
-	/***
-
-	if !dealtwith.Empty() && !cfg.TestMode {
-		item := imap.FormatFlagsOp(imap.SetFlags, true)
-		flags := []interface{}{imap.FlaggedFlag}
-		if *verbose {
-			fmt.Printf("%s leaving unread %v %v %v\n", logts(), dealtwith, item, flags)
-		}
-		err = c.UidStore(dealtwith, item, flags, nil)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
-	if !skipped.Empty() && !cfg.TestMode { // These are not yet dealt with
-		item := imap.FormatFlagsOp(imap.SetFlags, true)
-		flags := []interface{}{}
-		if *verbose {
-			fmt.Printf("%s releasing %v %v %v\n", logts(), skipped, item, flags)
-		}
-		err = c.UidStore(skipped, item, flags, nil)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
-		**/
 
 }
 
@@ -1382,6 +1352,9 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 				if ok && !*silent {
 					fmt.Printf("%v matched email from %v for rider %v <%v> [%v]\n", logts(), v.Address, RiderName, Email, ok)
 				}
+			}
+			if ok {
+				break
 			}
 		}
 		if !ok && !*silent {
