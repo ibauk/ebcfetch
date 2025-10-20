@@ -26,6 +26,7 @@ package main
 import (
 	"crypto/tls"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -76,9 +77,10 @@ var showusage = flag.Bool("?", false, "Show this help text")
 var path2db = flag.String("db", "sm/ScoreMaster.db", "Path of ScoreMaster database")
 var debugwait = flag.Bool("dw", false, "Wait for [Enter] at exit (debug)")
 var trapmails = flag.String("trap", "", "Path used to record trapped emails (overrides config)")
+var usingchasm = flag.Bool("sm4", false, "Processor is Chasm not SM3")
 
 const apptitle = "EBCFetch"
-const appversion = "1.10"
+const appversion = "1.11"
 const timefmt = time.RFC3339
 
 // I'll pass files without this extension to ebcimg for conversion
@@ -87,6 +89,9 @@ const standardimageextension = ".jpg"
 const ResponseStyleYes = ` font-size: large; color: lightgreen; `
 const ResponseStyleNo = ` font-size: x-large; color: red; `
 const ResponseStyleLbl = ` text-align: right; padding-right: 1em; `
+
+//go:embed ebcfetch.yml
+var basicCfg string
 
 var dbh *sql.DB
 
@@ -101,6 +106,36 @@ type EmailSettings struct {
 	Username string `json:"Username"`
 	Password string `json:"Password"`
 	CertName string `json:"CertName"`
+}
+
+// This MUST match Chasm's own declaration
+type chasmEmailSettings struct {
+	DontRun  bool
+	TestMode bool
+	SMTP     struct {
+		Host     string
+		Port     string
+		Userid   string
+		Password string
+		CertName string // May need to override the certificate name used for TLS
+	}
+	IMAP struct {
+		Host      string
+		Port      string
+		Userid    string
+		Password  string
+		NotBefore string
+		NotAfter  string
+	}
+}
+type chasmRallyBasics struct {
+	RallyTitle        string
+	RallyStarttime    string
+	RallyFinishtime   string
+	RallyMaxHours     int
+	RallyUnitKms      bool
+	RallyTimezone     string
+	RallyPointIsComma bool
 }
 
 var cfg struct {
@@ -134,18 +169,20 @@ var cfg struct {
 	TrapPath              string   `yaml:"trappath"`
 	TestMode              bool     `yaml:"testmode"`
 	SmtpStuff             EmailSettings
-	TestModeLiteral       string `yaml:"TestModeLiteral"`
-	TestResponseSubject   string `yaml:"TestResponseSubject"`
-	TestResponseGood      string `yaml:"TestResponseGood"`
-	TestResponseBad       string `yaml:"TestResponseBad"`
-	TestResponseAdvice    string `yaml:"TestResponseAdvice"`
-	TestResponseBCC       string `yaml:"TestResponseBCC"`
-	TestResponseBadEmail  string `yaml:"TestResponseBadEmail"`
-	TestResponseGoodEmail string `yaml:"TestResponseGoodEmail"`
-	MaxExtraPhotos        int    `yaml:"MaxExtraPhotos"`
-	DebugVerbose          bool   `yaml:"verbose"`
-	MaxFetch              int    `yaml:"MaxFetch"`
-	MaxBacktrack          int    `yaml:"MaxBacktrack"`
+	TestModeLiteral       string             `yaml:"TestModeLiteral"`
+	TestResponseSubject   string             `yaml:"TestResponseSubject"`
+	TestResponseGood      string             `yaml:"TestResponseGood"`
+	TestResponseBad       string             `yaml:"TestResponseBad"`
+	TestResponseAdvice    string             `yaml:"TestResponseAdvice"`
+	TestResponseBCC       string             `yaml:"TestResponseBCC"`
+	TestResponseBadEmail  string             `yaml:"TestResponseBadEmail"`
+	TestResponseGoodEmail string             `yaml:"TestResponseGoodEmail"`
+	MaxExtraPhotos        int                `yaml:"MaxExtraPhotos"`
+	DebugVerbose          bool               `yaml:"verbose"`
+	MaxFetch              int                `yaml:"MaxFetch"`
+	MaxBacktrack          int                `yaml:"MaxBacktrack"`
+	Email                 chasmEmailSettings `json:"Email"`
+	Basics                chasmRallyBasics   `json:"Basics"`
 }
 
 // fourFields: this contains the results of parsing the Subject line.
@@ -211,10 +248,13 @@ func parseTime(s string) time.Time {
 		"Mon, 2 Jan 2006 15:04:05 -0700",
 		time.RFC1123Z + " (MST)",
 		"Mon, 2 Jan 2006 15:04:05 -0700 (MST)",
+		"2006-01-02T15:04",
+		"2006-01-02 15:04",
+		"2006-01-02",
 	}
 
 	for _, format := range formats {
-		t, err := time.Parse(format, s)
+		t, err := time.ParseInLocation(format, s, cfg.LocalTZ)
 		if err == nil {
 			//fmt.Printf("Found time\n")
 			return t
@@ -316,6 +356,7 @@ func calcOffsetString(t time.Time) string {
 		if hrs > -10 {
 			res = res + "0"
 		}
+		hrs = 0 - hrs
 	} else {
 		if hrs < 10 {
 			res = res + "0"
@@ -376,7 +417,19 @@ func fetchBonus(b string, t string) (string, int) {
 	return BriefDesc, Points
 
 }
+func fetchConfigFromChasmDB() []byte {
+	rows, err := dbh.Query("SELECT Settings FROM config")
+	if err != nil {
+		fmt.Printf("%s can't fetch config from chasm database [%v] run aborted\n", logts(), err)
+		osExit(1)
+	}
+	defer rows.Close()
+	rows.Next()
+	var json []byte
+	rows.Scan(&json)
+	return json
 
+}
 func fetchConfigFromDB() (string, []byte) {
 	rows, err := dbh.Query("SELECT ebcsettings,EmailParams FROM rallyparams")
 	if err != nil {
@@ -786,6 +839,11 @@ func init() {
 		os.Exit(1)
 	}
 
+	file := strings.NewReader(basicCfg)
+
+	D := yaml.NewDecoder(file)
+	D.Decode(&cfg)
+
 	if !*silent {
 		fmt.Printf("%v: v%v   %v\n", apptitle, appversion, copyrite)
 	}
@@ -839,6 +897,7 @@ func init() {
 	if cfg.ImapServer == "" || cfg.ImapLogin == "" {
 		fmt.Printf("%s: Email configuration has not been specified\n", apptitle)
 		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
+		os.Exit(1)
 	} else if cfg.ImapPassword == "" {
 		fmt.Printf("%s: No password has been set for incoming IMAP account %v\n", apptitle, cfg.ImapServer)
 		fmt.Printf("%s: Email fetching will not be possible. Please fix %v and retry\n", apptitle, configPath)
@@ -863,39 +922,54 @@ func init() {
 
 func loadRallyData() bool {
 
-	rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
-	if err != nil {
-		fmt.Printf("%s: OMG %v\n", apptitle, err)
-		osExit(1)
-	}
-	defer rows.Close()
-	rows.Next()
+	var err error
 	var RallyStart, RallyFinish, LocalTZ string
-	rows.Scan(&cfg.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
 
-	cfg.LocalTimezone = LocalTZ
-	cfg.LocalTZ, err = time.LoadLocation(LocalTZ)
+	if !*usingchasm {
+		rows, err := dbh.Query("SELECT RallyTitle, StartTime as RallyStart,FinishTime as RallyFinish,LocalTZ FROM rallyparams")
+		if err != nil {
+			fmt.Printf("%s: OMG %v\n", apptitle, err)
+			osExit(1)
+		}
+		defer rows.Close()
+		rows.Next()
+		rows.Scan(&cfg.RallyTitle, &RallyStart, &RallyFinish, &LocalTZ)
+
+		cfg.LocalTimezone = LocalTZ
+	}
+	cfg.LocalTZ, err = time.LoadLocation(cfg.LocalTimezone)
 	if err != nil {
-		fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, LocalTZ)
+		fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, cfg.LocalTimezone)
 		return false
 	}
 
 	// Make the rally timezone our timezone, regardless of what the server is set to
 	time.Local = cfg.LocalTZ
 
-	cfg.RallyStart, err = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
-	if err != nil {
-		fmt.Printf("%s RallyStart %s cannot be parsed\n", apptitle, RallyStart)
-		return false
+	if !*usingchasm {
+		cfg.RallyStart, err = time.ParseInLocation("2006-01-02T15:04", RallyStart, cfg.LocalTZ)
+		if err != nil {
+			fmt.Printf("%s RallyStart %s cannot be parsed\n", apptitle, RallyStart)
+			return false
+		}
+	} else {
+		cfg.RallyStart, err = time.ParseInLocation("2006-01-02T15:04", cfg.Basics.RallyStarttime, cfg.LocalTZ)
+		if err != nil {
+			fmt.Printf("%s RallyStart %s cannot be parsed\n", apptitle, cfg.Basics.RallyStarttime)
+			return false
+		}
 	}
+
 	cfg.OffsetTZ = calcOffsetString(cfg.RallyStart)
 	if *verbose {
 		fmt.Printf("%s: Rally timezone is %v [%v]\n", apptitle, cfg.LocalTZ, cfg.OffsetTZ)
 	}
-	cfg.RallyFinish, err = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
-	if err != nil {
-		fmt.Printf("%s RallyFinish %s cannot be parsed\n", apptitle, RallyFinish)
-		return false
+	if !*usingchasm {
+		cfg.RallyFinish, err = time.ParseInLocation("2006-01-02T15:04", RallyFinish, cfg.LocalTZ)
+		if err != nil {
+			fmt.Printf("%s RallyFinish %s cannot be parsed\n", apptitle, RallyFinish)
+			return false
+		}
 	}
 	return true
 
@@ -1054,11 +1128,50 @@ func parseSubject(s string, formal bool) *fourFields {
 
 func refreshConfig() {
 
-	ymltext, jsontext := fetchConfigFromDB()
-	file := strings.NewReader(ymltext)
-	D := yaml.NewDecoder(file)
-	D.Decode(&cfg)
-	json.Unmarshal(jsontext, &cfg.SmtpStuff)
+	var ymltext string
+	var jsontext []byte
+	var err error
+
+	if *usingchasm {
+		jsontext = fetchConfigFromChasmDB()
+		json.Unmarshal(jsontext, &cfg)
+		cfg.ImapServer = cfg.Email.IMAP.Host + ":" + cfg.Email.IMAP.Port
+		cfg.ImapLogin = cfg.Email.IMAP.Userid
+		cfg.ImapPassword = cfg.Email.IMAP.Password
+		cfg.LocalTimezone = cfg.Basics.RallyTimezone
+		cfg.LocalTZ, err = time.LoadLocation(cfg.LocalTimezone)
+		if err != nil {
+			fmt.Printf("%s Timezone %s cannot be loaded\n", apptitle, cfg.LocalTimezone)
+		}
+
+		cfg.NotBefore = parseTime(cfg.Email.IMAP.NotBefore)
+		cfg.NotAfter = parseTime(cfg.Email.IMAP.NotAfter)
+		cfg.RallyTitle = cfg.Basics.RallyTitle
+		cfg.RallyStart = parseTime(cfg.Basics.RallyStarttime)
+		cfg.RallyFinish = parseTime(cfg.Basics.RallyFinishtime)
+		cfg.SmtpStuff.Host = cfg.Email.SMTP.Host
+		cfg.SmtpStuff.Port, _ = strconv.Atoi(cfg.Email.SMTP.Port)
+		cfg.SmtpStuff.Username = cfg.Email.SMTP.Userid
+		cfg.SmtpStuff.Password = cfg.Email.SMTP.Password
+		cfg.SmtpStuff.CertName = cfg.Email.SMTP.CertName
+		cfg.DontRun = cfg.Email.DontRun
+		cfg.TestMode = cfg.Email.TestMode
+
+		if false {
+			b, err := json.MarshalIndent(cfg, "", "\t")
+			if err != nil {
+				fmt.Print("omg - json")
+			}
+			fmt.Printf("%v\n", string(b))
+		}
+	} else {
+
+		ymltext, jsontext = fetchConfigFromDB()
+		file := strings.NewReader(ymltext)
+		D := yaml.NewDecoder(file)
+		D.Decode(&cfg)
+		json.Unmarshal(jsontext, &cfg.SmtpStuff)
+	}
 	if cfg.DebugVerbose {
 		*verbose = true
 	}
@@ -1066,8 +1179,9 @@ func refreshConfig() {
 		cfg.MaxBacktrack = 3 // Sensible default
 	}
 	cfg.Path2SM = filepath.Dir(*path2db)
-	if *verbose {
-		fmt.Printf("%s refreshConfig: MaxFetch=%v, MaxBacktrack=%v\n", logts(), cfg.MaxFetch, cfg.MaxBacktrack)
+	if false {
+		fmt.Printf("%s refreshConfig: MaxFetch=%v, MaxBacktrack=%v, Path2SM=%v, RallyTitle=%v\n", logts(), cfg.MaxFetch, cfg.MaxBacktrack, cfg.Path2SM, cfg.RallyTitle)
+		//fmt.Printf("%v\n", cfg)
 	}
 
 }

@@ -1,26 +1,48 @@
-imapserver: imap.gmail.com:993
-login: ibaukebc@gmail.com
-password: 
+# ebcfetch.yml
+
+# This provides a basic default specification, most of which will be overridden from the live
+# database.
+
+# If true, only process emails sent from entrant's registered address
+# For general testing purposes you probably want to leave this false so that you can use your own email address to send test claims.
+# You should turn this on for the actual rally though as it will prevent scores being affected by mistaken claims.
+matchemail: false
+
+
+# If this flag is true, EBC fetching will be suppressed
+dontrun: false
+
+
+# Executable to convert HEIC image files to JPG
+# The arguments are expected to be:- filename.HEIC filename.JPG
+# Will be called at BOJ with no arguments to validate installation
+# This uses the ImageMagick package which must be installed on the server
+heic2jpg: ebcimg
+
+convertheic2jpg: true
+
+
+
 
 # Sleep this long between mailbox inspections
 sleepseconds: 10
 
 # Don't fetch emails older (imap.internaldate) than this date
-notbefore: 2021-07-01
+notbefore: 2025-01-01
 
 # Fetch emails without any of these flags
 selectflags: ["\\Flagged", "\\Seen"]
 
 
-# ScoreMaster compatible database including ebc tables
-db: ebcfetch.db
-
-# Acceptable subject line RE. This accepts decorated entrant number, commas as separators, various time formats, optional odo/time
-subject: '\s*[A-Za-z]*(\d+)[A-Za-z]*\s*\,?\s*([a-zA-Z0-9\-]+)\s*\,?\s*(\d+)?\.*\d*\s*\,?\s*(\d\d?[.:]*\d\d)?\s*(.*)'
+# Acceptable subject line RE. This accepts decorated entrant numbers, various time formats. Must have four fields.
+subject: '(\d+)[\s\.,]+([\w\-]+\-?)[\s\.,]+(\d+)[\s\.,]+([\d:\.\-\+TZ]+)[\s\.,]*(.*)'
 
 # Subject line RE to measure strict adherence to standard
 strict: '^\s*(\d+)\s+([a-zA-Z0-9\-]+)\s+(\d+)\s+(\d\d\d\d)'
+
 checkstrict: true
+
+allowbody: true
 
 # Filesystem path to ScoreMaster folder
 path2sm: sm
@@ -28,16 +50,35 @@ path2sm: sm
 # Path from ScoreMaster folder to EBC image folder
 imagefolder: ebcimg
 
-# If true, only process emails sent from entrant's registered address
-matchemail: true
+################ Testmode settings below here
 
-# Executable to convert HEIC image files to JPG
-# The arguments are expected to be:- filename.HEIC filename.JPG
-# Will be called at BOJ with no arguments to validate installation
-# This uses the ImageMagick package which must be installed on the server
-heic2jpg: magick
+# testmode = true = respond to emails with analysis; false = pass emails to ScoreMaster
+testmode: false
 
-convertheic2jpg: true
+# Setting this to true turns on debugging level log entries
+verbose: false
 
-Allow four fields in body rather than Subject
-allowbody: true
+# Literals used in testmode response emails
+
+TestResponseSubject: EBC test result / Testergebnis
+TestResponseGood: Good bonus claim received / Guter Bonusanspruch erhalten
+TestResponseBad: Bad bonus claim received / Ungültiger Bonusanspruch erhalten
+TestResponseGoodEmail: 🇬🇧 In the rally you MUST use your registered email address.<br>🇩🇪 Während der Rally MÜSSEN Sie Ihre registrierte E-Mail-Adresse verwenden 
+TestResponseBadEmail: 🇬🇧 Ok for testing but in the rally you MUST use your registered email address.<br>🇩🇪 Zum Testen okay, aber bei der Rally MÜSSEN Sie Ihre registrierte E-Mail-Adresse verwenden
+TestResponseAdvice: |
+  <p>🇬🇧 Good/bad here means that the email did/did not contain a
+  valid bonus claim. It does not mean that the claim will succeed (maybe the
+  photo is the wrong one) or fail, it just means that it will be processed
+  correctly.<br>🇩🇪 Gut/schlecht bedeutet hier, dass die E-Mail einen gültigen Bonusanspruch enthielt/enthielt. Dies bedeutet nicht, dass der Anspruch erfolgreich ist (vielleicht ist das Foto das falsche) oder fehlschlägt, es bedeutet nur, dass er korrekt verarbeitet wird.</p>
+
+  <p>🇬🇧 You are receiving this because we're operating in test mode. YOU WILL NOT RECEIVE ANY RESPONSES DURING THE RALLY.<br>🇩🇪 Sie erhalten diese, weil wir uns im Testmodus befinden. WÄHREND DER RALLYE ERHALTEN SIE KEINE ANTWORTEN.</p>
+
+TestModeLiteral: TEST MODE
+
+
+# Can be used to expressly permit more than 1 photo
+# MaxExtraPhotos: 1
+
+TestResponseBCC:
+
+
