@@ -80,7 +80,7 @@ var trapmails = flag.String("trap", "", "Path used to record trapped emails (ove
 var usingchasm = flag.Bool("sm4", false, "Processor is Chasm not SM3")
 
 const apptitle = "EBCFetch"
-const appversion = "1.11"
+const appversion = "1.12"
 const timefmt = time.RFC3339
 
 // I'll pass files without this extension to ebcimg for conversion
@@ -478,16 +478,11 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		criteria.SentBefore = cfg.NotAfter
 	}
 
-	//	if *verbose {
-	//		fmt.Printf("%s searching ... ", logts())
-	//	}
 	uids, err := c.Search(criteria)
 	if err != nil {
 		log.Printf("Search: %v\n", err)
+		return nil, nil
 	}
-	//	if *verbose {
-	//		fmt.Printf("%s ok\n", logts())
-	//	}
 
 	// Collect the unique IDs of messages found
 	seqset := new(imap.SeqSet)
@@ -521,9 +516,10 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 	// Get the whole message body, automatically sets //Seen
 	section := &imap.BodySectionName{}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchUid, imap.FetchInternalDate}
-	messages := make(chan *imap.Message, 1)
+	messages := make(chan *imap.Message, Nmax+1) // Buffered channel wide enough for all messages +1 for luck
 	done := make(chan error, 1)
 	go func() {
+		defer close(done)
 		done <- c.Fetch(seqset, items, messages)
 	}()
 
@@ -535,8 +531,6 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if *verbose {
 			fmt.Printf("Considering msg #%v=%v\n", N, currentUid)
 		}
-
-		var TR testResponse
 
 		r := msg.GetBody(section) // This automatically marks the message as 'read'
 		if r == nil {
@@ -552,6 +546,8 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if cfg.TrapMails && cfg.TrapPath != "" {
 			fmt.Printf("INCOMING: %v\n", m)
 		}
+
+		var TR testResponse
 
 		f4 := parseSubject(m.Subject, false)
 		if m.Subject == "" && cfg.AllowBody {
@@ -605,19 +601,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 
 		if !vea && !cfg.TestMode {
 			if !*silent {
-				okx := "ok"
-				if !f4.ok {
-					okx = "FALSE"
-				}
-				vex := "ok"
-				if !ve {
-					vex = "FALSE"
-				}
-				vbx := "ok"
-				if vb == "" {
-					vbx = "FALSE"
-				}
-				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, okx, vex, vbx)
+				fmt.Printf("%v skipping %v [%v] ok=%v,ve=%v,vb=%v\n", logts(), m.Subject, msg.Uid, okFalseString(f4.ok), okFalseString(ve), okFalseString(vb != ""))
 			}
 			dealtwith.AddNum(msg.Uid) // Can't / won't process but don't want to see it again
 			if !cfg.TestMode {
@@ -629,87 +613,12 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 
 		}
 
-		var photoid int = 0
-		var photoids string
-		var photoTime time.Time
-		var numphotos int = 0
-		var photosok bool = true
-		for _, a := range m.Attachments {
-			if *verbose {
-				fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
-			}
-			pt := timeFromPhoto(a.Filename, a.ContentDisposition)
-			numphotos++
-			if pt.After(photoTime) {
-				photoTime = pt
-			}
-			pix, err := io.ReadAll(a.Data)
-			if err != nil {
-				if !*silent {
-					fmt.Printf("%s attachment error %v\n", logts(), err)
-					photosok = false
-					break
-				}
-			} else {
-				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, string(a.Filename))
-				if photoid == 0 && !cfg.TestMode {
-					photosok = false
-					break
-				}
-				if photoids != "" {
-					photoids += ","
-				}
-				photoids += strconv.Itoa(photoid)
-				if *verbose {
-					fmt.Printf("%s attachment of size %v bytes\n", logts(), len(pix))
-				}
-			}
-			//fmt.Printf("  Photo: %v\n", pt.Format(myTimeFormat))
-		}
-		for _, a := range m.EmbeddedFiles {
-			if *verbose {
-				fmt.Printf("%s Emb: CD = %v\n", logts(), a.ContentDisposition)
-			}
-			pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
-			numphotos++
-			if pt.After(photoTime) {
-				photoTime = pt
-			}
-			pix, err := io.ReadAll(a.Data)
-			if err != nil {
-				if !*silent {
-					fmt.Printf("%s embedding error %v\n", logts(), err)
-					photosok = false
-					break
-				}
-			} else {
-				photoid = writeImage(f4.EntrantID, f4.BonusID, msg.Uid, pix, a.ContentDisposition)
-				if photoid == 0 && !cfg.TestMode {
-					photosok = false
-					break
-				}
-				if photoids != "" {
-					photoids += ","
-				}
-				photoids += strconv.Itoa(photoid)
-
-				if *verbose {
-					fmt.Printf("%s embedded image of size %v bytes\n", logts(), len(pix))
-				}
-			}
-			if *verbose {
-				fmt.Printf("%s photo: %v\n", logts(), pt.Format(myTimeFormat))
-			}
-		}
+		photosok, numphotos, photoids, photoTime := processImages(m, f4.EntrantID, f4.BonusID, msg.Uid)
 
 		if photosok {
 			TR.PhotoPresent = numphotos
 		} else if numphotos > 0 {
 			TR.PhotoPresent = 0 - numphotos
-		}
-
-		if numphotos != 1 {
-			photoid = 0 // Make ScoreMaster hunt for photos
 		}
 
 		var sentatTime time.Time = msg.InternalDate
@@ -729,30 +638,29 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		if cfg.TestMode {
 			sendTestResponse(TR, m.Header.Get("From"), f4)
 			continue
-		} else {
-
-			var sb strings.Builder
-			sb.WriteString("INSERT INTO ebclaims (LoggedAt,DateTime,EntrantID,BonusID,OdoReading,")
-			sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
-			sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
-			sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-			_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
-				f4.EntrantID, f4.BonusID, f4.OdoReading,
-				storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
-				//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
-				storeTimeDB(f4.ClaimTime),
-				m.Subject, f4.Extra,
-				false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
-			if err != nil {
-				if !*silent {
-					fmt.Printf("%s can't store claim - %v\n", logts(), err)
-				}
-				skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
-				continue
-			}
-			LastGoodUid = msg.Uid
-
 		}
+
+		var sb strings.Builder
+		sb.WriteString("INSERT INTO ebclaims (LoggedAt,DateTime,EntrantID,BonusID,OdoReading,")
+		sb.WriteString("FinalTime,EmailID,ClaimHH,ClaimMM,ClaimTime,Subject,ExtraField,")
+		sb.WriteString("StrictOk,AttachmentTime,FirstTime,PhotoID) ")
+		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
+			f4.EntrantID, f4.BonusID, f4.OdoReading,
+			storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
+			//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
+			storeTimeDB(f4.ClaimTime),
+			m.Subject, f4.Extra,
+			false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
+		if err != nil {
+			if !*silent {
+				fmt.Printf("%s can't store claim - %v\n", logts(), err)
+			}
+			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
+			continue
+		}
+		LastGoodUid = msg.Uid
+
 		if !*silent {
 			fmt.Printf("Claiming #%v [ %v ]\n", msg.Uid, m.Subject)
 		}
@@ -761,27 +669,55 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 
 	if err := <-done; err != nil {
 		if !*silent {
-			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
+			log.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
-		for i := uint32(0); i < uint32(cfg.MaxBacktrack); i++ {
+
+		for i := uint32(0); i < uint32(Nmax-N); i++ {
 			if currentUid+i > LastGoodUid {
 				skipped.AddNum(currentUid + i)
 			}
 		}
-		//return
 	}
 
 	return dealtwith, skipped
 
 }
 
-func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
+func safelyFlagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
+
+	const maxTries = 10
+
+	if cfg.TestMode {
+		return
+	}
+
+	if ss == nil {
+		return
+	}
+	if ss.Empty() {
+		return
+	}
+	n := maxTries
+	for {
+		if flagSkippedEmails(ss, ignoreThem) {
+			return
+		}
+		n--
+		if n < 1 {
+			break
+		}
+	}
+	log.Printf("OMG can't skip %v, it=%v\n", ss, ignoreThem)
+
+}
+
+func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) bool {
 
 	// Connect to server
 	c, err := client.DialTLS(cfg.ImapServer, nil)
 	if err != nil {
 		log.Printf("fse:DialTLS: %v\n", err)
-		return
+		return false
 	}
 
 	// Don't forget to logout
@@ -790,14 +726,14 @@ func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
 	// Login
 	if err := c.Login(cfg.ImapLogin, cfg.ImapPassword); err != nil {
 		log.Printf("fse:Login: %v\n", err)
-		return
+		return false
 	}
 
 	// Select INBOX
 	_, err = c.Select("INBOX", false)
 	if err != nil {
 		log.Printf("fse:Select: %v\n", err)
-		return
+		return false
 	}
 
 	item := imap.FormatFlagsOp(imap.SetFlags, true)
@@ -816,8 +752,9 @@ func flagSkippedEmails(ss *imap.SeqSet, ignoreThem bool) {
 	err = c.UidStore(ss, item, flags, nil)
 	if err != nil {
 		log.Println(err)
-		return
+		return false
 	}
+	return true
 
 }
 
@@ -1000,14 +937,12 @@ func main() {
 	for {
 		if monitoring {
 			dflags, sflags := fetchNewClaims()
-			if dflags != nil && !dflags.Empty() && !cfg.TestMode {
-				flagSkippedEmails(dflags, true)
-			}
-			if sflags != nil && !sflags.Empty() && !cfg.TestMode {
-				flagSkippedEmails(sflags, false)
-			}
+			safelyFlagSkippedEmails(dflags, true)
+			safelyFlagSkippedEmails(sflags, false)
 		}
+
 		time.Sleep(time.Duration(cfg.SleepSeconds) * time.Second)
+
 		if ReloadConfigFromDB {
 			refreshConfig()
 			newmon := monitoringOK()
@@ -1018,6 +953,14 @@ func main() {
 			}
 		}
 	}
+}
+
+func okFalseString(b bool) string {
+
+	if b {
+		return "ok"
+	}
+	return "FALSE"
 }
 
 func openDB(dbpath string) {
@@ -1044,6 +987,84 @@ func osExit(res int) {
 
 	defer os.Exit(res)
 	runtime.Goexit()
+
+}
+
+func processImages(m Email, EntrantID int, BonusID string, EmailID uint32) (bool, int, string, time.Time) {
+
+	var photoid int = 0
+	var photoids string
+	var photoTime time.Time
+	var numphotos int = 0
+	var photosok bool = true
+	for _, a := range m.Attachments {
+		if *verbose {
+			fmt.Printf("%s Att: CD = %v\n", logts(), a.ContentDisposition)
+		}
+		pt := timeFromPhoto(a.Filename, a.ContentDisposition)
+		numphotos++
+		if pt.After(photoTime) {
+			photoTime = pt
+		}
+		pix, err := io.ReadAll(a.Data)
+		if err != nil {
+			if !*silent {
+				fmt.Printf("%s attachment error %v\n", logts(), err)
+				photosok = false
+				break
+			}
+		} else {
+			photoid = writeImage(EntrantID, BonusID, EmailID, pix, string(a.Filename))
+			if photoid == 0 && !cfg.TestMode {
+				photosok = false
+				break
+			}
+			if photoids != "" {
+				photoids += ","
+			}
+			photoids += strconv.Itoa(photoid)
+			if *verbose {
+				fmt.Printf("%s attachment of size %v bytes\n", logts(), len(pix))
+			}
+		}
+	}
+	for _, a := range m.EmbeddedFiles {
+		if *verbose {
+			fmt.Printf("%s Emb: CD = %v\n", logts(), a.ContentDisposition)
+		}
+		pt := timeFromPhoto(nameFromContentType(a.ContentType), a.ContentDisposition)
+		numphotos++
+		if pt.After(photoTime) {
+			photoTime = pt
+		}
+		pix, err := io.ReadAll(a.Data)
+		if err != nil {
+			if !*silent {
+				fmt.Printf("%s embedding error %v\n", logts(), err)
+				photosok = false
+				break
+			}
+		} else {
+			photoid = writeImage(EntrantID, BonusID, EmailID, pix, a.ContentDisposition)
+			if photoid == 0 && !cfg.TestMode {
+				photosok = false
+				break
+			}
+			if photoids != "" {
+				photoids += ","
+			}
+			photoids += strconv.Itoa(photoid)
+
+			if *verbose {
+				fmt.Printf("%s embedded image of size %v bytes\n", logts(), len(pix))
+			}
+		}
+		if *verbose {
+			fmt.Printf("%s photo: %v\n", logts(), pt.Format(myTimeFormat))
+		}
+	}
+
+	return photosok, numphotos, photoids, photoTime
 
 }
 
@@ -1119,10 +1140,6 @@ func parseSubject(s string, formal bool) *fourFields {
 		f4.Extra = ff[5]
 	}
 
-	//	if cfg.DebugVerbose {
-	//		fmt.Printf("%v [%v] (%v) '%v' == %v; %v == %v; Odo=%v; Time=%v; Extra='%v'\n", formal, s, len(ff), ff[1], f4.EntrantID, ff[2], f4.BonusID, f4.OdoReading, f4.HHmm, f4.Extra)
-	//	}
-
 	return &f4
 }
 
@@ -1176,7 +1193,7 @@ func refreshConfig() {
 		*verbose = true
 	}
 	if cfg.MaxBacktrack < 1 {
-		cfg.MaxBacktrack = 3 // Sensible default
+		cfg.MaxBacktrack = 13 // Sensible default
 	}
 	cfg.Path2SM = filepath.Dir(*path2db)
 	if false {
