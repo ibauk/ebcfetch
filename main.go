@@ -80,7 +80,7 @@ func main() {
 	for {
 		if monitoring {
 			dflags, sflags := fetchNewClaims()
-			if *verbose {
+			if *verbose && (dflags != nil || sflags != nil) {
 				fmt.Printf("%s dflags=%v; sflags=%v\n", logts(), dflags, sflags)
 			}
 			safelyFlagSkippedEmails(dflags, true)
@@ -197,6 +197,9 @@ func validateBonus(f4 fourFields) string {
 
 }
 
+// SQL for safely retrieving full names
+const RiderNameSQL = "ifnull(entrants.RiderName,ifnull(entrants.RiderFirst,'') || ' ' || ifnull(entrants.RiderLast,'')) AS RiderName"
+
 func validateEntrant(f4 fourFields, from string) (bool, bool) {
 
 	var allE []string
@@ -204,7 +207,7 @@ func validateEntrant(f4 fourFields, from string) (bool, bool) {
 		allE = listValidTestAddresses()
 	}
 
-	sqlx := "SELECT RiderName,Email,TeamID FROM entrants WHERE EntrantID=" + strconv.Itoa(f4.EntrantID)
+	sqlx := "SELECT " + RiderNameSQL + ",Email,TeamID FROM entrants WHERE EntrantID=" + strconv.Itoa(f4.EntrantID)
 	team := fetchTeamID(f4.EntrantID)
 	if team > 0 {
 		sqlx += " OR TeamID=" + strconv.Itoa(team)

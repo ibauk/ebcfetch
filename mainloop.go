@@ -110,7 +110,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		}
 		m, err := Parse(r)
 		if err != nil {
-			log.Printf("Parse error: %v\n", err)
+			log.Printf("Parse error: [%v] %v\n", currentUid, err)
 			continue
 		}
 

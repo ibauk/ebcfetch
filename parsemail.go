@@ -28,11 +28,13 @@ const contentTypeMultipartMixed = "multipart/mixed"
 const contentTypeMultipartAlternative = "multipart/alternative"
 const contentTypeMultipartRelated = "multipart/related"
 const contentTypeMultipartSigned = "multipart/signed"
+const contentTypeTextXampHtml = "text/x-amp-html"
 const contentTypeTextHtml = "text/html"
 const contentTypeTextPlain = "text/plain"
 const contentTypeApplicationPKCS = "application/pkcs7-signature"
 const contentTypeOctetStream = "application/octet-stream"
 const contentTypeImageJpeg = "image/jpeg"
+const contentTypeMessageRFC822 = "message/rfc822"
 
 // Parse an email message read from io.Reader into parsemail.Email struct
 func Parse(r io.Reader) (email Email, err error) {
@@ -202,6 +204,13 @@ func parseMultipartRelated(msg io.Reader, boundary string) (textBody, htmlBody s
 
 			textBody += strings.TrimSuffix(string(ppContent[:]), "\n")
 		case contentTypeTextHtml:
+			ppContent, err := io.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, embeddedFiles, err
+			}
+
+			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+		case contentTypeTextXampHtml:
 			ppContent, err := io.ReadAll(part)
 			if err != nil {
 				return textBody, htmlBody, embeddedFiles, err
@@ -397,6 +406,13 @@ func parseMultipartMixed(msg io.Reader, boundary string) (textBody, htmlBody str
 
 			textBody += strings.TrimSuffix(string(ppContent[:]), "\n")
 		} else if contentType == contentTypeTextHtml {
+			ppContent, err := io.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+		} else if contentType == contentTypeMessageRFC822 {
 			ppContent, err := io.ReadAll(part)
 			if err != nil {
 				return textBody, htmlBody, attachments, embeddedFiles, err
