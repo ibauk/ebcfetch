@@ -176,9 +176,9 @@ func listValidTestAddresses() []string {
 func showMonitorStatus(monitoring bool) {
 	if !*silent {
 		if !monitoring {
-			fmt.Printf("%v %v: Monitoring suspended\n", apptitle, appversion)
+			fmt.Printf("%v: v%v Monitoring suspended\n", apptitle, appversion)
 		} else {
-			fmt.Printf("%v %v: Monitoring %v for %v", apptitle, appversion, cfg.ImapLogin, cfg.RallyTitle)
+			fmt.Printf("%v: v%v Monitoring %v for %v", apptitle, appversion, cfg.ImapLogin, cfg.RallyTitle)
 			if cfg.TestMode {
 				fmt.Print(" [ TEST MODE ]")
 			}

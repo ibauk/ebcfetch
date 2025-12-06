@@ -276,6 +276,14 @@ func parseMultipartSigned(msg io.Reader, boundary string) (textBody, htmlBody st
 			}
 
 			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+		case contentTypeTextXampHtml:
+			ppContent, err := io.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, attachments, embeddedFiles, err
+			}
+
+			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+
 		case contentTypeMultipartAlternative:
 			tb, hb, ef, err := parseMultipartAlternative(part, params["boundary"])
 			if err != nil {
@@ -347,6 +355,14 @@ func parseMultipartAlternative(msg io.Reader, boundary string) (textBody, htmlBo
 			}
 
 			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+		case contentTypeTextXampHtml:
+			ppContent, err := io.ReadAll(part)
+			if err != nil {
+				return textBody, htmlBody, embeddedFiles, err
+			}
+
+			htmlBody += strings.TrimSuffix(string(ppContent[:]), "\n")
+
 		case contentTypeMultipartRelated:
 			tb, hb, ef, err := parseMultipartRelated(part, params["boundary"])
 			if err != nil {

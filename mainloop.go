@@ -100,7 +100,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 
 		N++
 		if *verbose {
-			fmt.Printf("Considering msg #%v=%v\n", N, currentUid)
+			fmt.Printf("%v Considering msg #%v=%v\n", logts(), N, currentUid)
 		}
 
 		r := msg.GetBody(section) // This automatically marks the message as 'read'
@@ -218,8 +218,7 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 		sb.WriteString("VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 		_, err = dbh.Exec(sb.String(), storeTimeDB(time.Now()), storeTimeDB(m.Date.Local()),
 			f4.EntrantID, f4.BonusID, f4.OdoReading,
-			storeTimeDB(msg.InternalDate), msg.Uid, f4.TimeHH, f4.TimeMM,
-			//storeTimeDB(calcClaimDate(f4.TimeHH, f4.TimeMM, m.Date)),
+			storeTimeDB(msg.InternalDate), currentUid, f4.TimeHH, f4.TimeMM,
 			storeTimeDB(f4.ClaimTime),
 			m.Subject, f4.Extra,
 			false, photoTime, sentatTime, photoids) // Writing photoids NOT photoid
@@ -227,31 +226,34 @@ func fetchNewClaims() (*imap.SeqSet, *imap.SeqSet) {
 			if !*silent {
 				fmt.Printf("%s can't store claim - %v\n", logts(), err)
 			}
-			skipped.AddNum(msg.Uid) // Can't process now but I'll try again later
+			skipped.AddNum(currentUid) // Can't process now but I'll try again later
 			continue
 		}
-		lastGoodUid = msg.Uid
+		if currentUid > lastGoodUid {
+			lastGoodUid = currentUid
+		}
 
 		if !*silent {
-			fmt.Printf("Claiming #%v [ %v ]\n", msg.Uid, m.Subject)
+			fmt.Printf("%v Claiming #%v [ %v ]\n", logts(), msg.Uid, m.Subject)
 		}
 
 	} // End msg loop
 
 	if err := <-done; err != nil {
 		if !*silent {
-			log.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
+			fmt.Printf("%s OMG!! msg=%v (%v / %v) %v\n", logts(), currentUid, N, Nmax, err)
 		}
 
 		// This loop adds back EmailIDs that were potentially called
 		// but not processed. It is possible that there were gaps in
 		// the range called so need to add a 'sensible' overrun so:-
 
-		release := Nmax - N
+		const sensible = 20
+		release := (Nmax - N) + sensible
 		for i := uint32(0); i <= uint32(release); i++ {
 			if currentUid+i > lastGoodUid {
 				skipped.AddNum(currentUid + i)
-				if *verbose {
+				if *verbose && false {
 					log.Printf("%s OMG=%v\n", logts(), currentUid+i)
 				}
 			}
